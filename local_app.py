@@ -9,7 +9,7 @@ from chromadb.config import Settings
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, CrossEncoder
 
 import build_index as build_index_module
 
@@ -146,14 +146,27 @@ def _retrieve(embed_model: SentenceTransformer, collection: Any, query: str, k: 
             seen_keys.add(key)
             out.append(Chunk(source=src, distance=None, text=text))
 
-    # Rerank: lexical hits first, then by embedding distance.
+    # Stage 1: lexical + embedding score to get top candidates
     out.sort(
         key=lambda c: (
             -_lexical_score(query, c.text),
             c.distance if c.distance is not None else 1e9,
         )
     )
-    return out[:k]
+    candidates = out[:max(k * 4, 20)]
+
+    # Stage 2: cross-encoder reranking for precision
+    if len(candidates) > k:
+        try:
+            reranker = _get_reranker()
+            pairs = [[query, c.text] for c in candidates]
+            scores = reranker.predict(pairs)
+            scored = sorted(zip(candidates, scores), key=lambda x: -x[1])
+            candidates = [c for c, _ in scored]
+        except Exception:
+            pass
+
+    return candidates[:k]
 
 
 def _ollama_chat(messages: list, temperature: float = 0, num_ctx: int = 8192, timeout: int = 300) -> str:
@@ -272,6 +285,7 @@ app = FastAPI(title="Dama RAG (local)")
 
 _lock = threading.RLock()
 _embed_model: Optional[SentenceTransformer] = None
+_reranker: Optional[CrossEncoder] = None
 
 
 def _get_embed_model() -> SentenceTransformer:
@@ -279,6 +293,13 @@ def _get_embed_model() -> SentenceTransformer:
     if _embed_model is None:
         _embed_model = SentenceTransformer("all-MiniLM-L6-v2")
     return _embed_model
+
+
+def _get_reranker() -> CrossEncoder:
+    global _reranker
+    if _reranker is None:
+        _reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+    return _reranker
 
 
 @app.get("/", response_class=HTMLResponse)
