@@ -13,7 +13,7 @@ BASE_DIR = Path(__file__).resolve().parent
 PERSIST_DIR = BASE_DIR / "rag_index"
 COLLECTION_NAME = "dama_transcripts"
 OLLAMA_BASE_URL = "http://localhost:11434"
-OLLAMA_MODEL = "qwen2.5:14b"
+OLLAMA_MODEL = "mistral:instruct"
 
 
 def get_collection():

@@ -18,7 +18,7 @@ BASE_DIR = Path(__file__).resolve().parent
 PERSIST_DIR = BASE_DIR / "rag_index"
 COLLECTION_NAME = "dama_transcripts"
 OLLAMA_BASE_URL = "http://localhost:11434"
-OLLAMA_MODEL = "qwen2.5:14b"
+OLLAMA_MODEL = "mistral:instruct"
 
 
 class QueryRequest(BaseModel):
@@ -169,14 +169,16 @@ def _retrieve(embed_model: SentenceTransformer, collection: Any, query: str, k: 
     return candidates[:k]
 
 
-def _ollama_chat(messages: list, temperature: float = 0, num_ctx: int = 8192, timeout: int = 300) -> str:
+def _ollama_chat(messages: list, temperature: float = 0, num_ctx: int = 4096, timeout: int = 600) -> str:
     resp = requests.post(
         f"{OLLAMA_BASE_URL}/api/chat",
         json={"model": OLLAMA_MODEL, "messages": messages, "stream": False,
               "options": {"temperature": temperature, "num_ctx": num_ctx}},
         timeout=timeout,
     )
-    resp.raise_for_status()
+    if resp.status_code != 200:
+        error_detail = resp.text[:500]
+        raise RuntimeError(f"Ollama returned {resp.status_code}: {error_detail}")
     return resp.json().get("message", {}).get("content", "")
 
 
@@ -201,7 +203,7 @@ def _map_extract(query: str, chunk: Chunk, index: int) -> str:
             ),
         },
     ]
-    return _ollama_chat(messages, num_ctx=4096, timeout=120)
+    return _ollama_chat(messages, num_ctx=4096, timeout=300)
 
 
 def _reduce_synthesize(query: str, extracted_notes: str) -> str:
@@ -234,7 +236,7 @@ def _reduce_synthesize(query: str, extracted_notes: str) -> str:
 
 
 def _call_llm(query: str, chunks: List[Chunk]) -> str:
-    if len(chunks) <= 3:
+    if len(chunks) <= 10:
         numbered = "\n\n".join(
             [f"[Excerpt {i+1} | source: {c.source}]\n{c.text}" for i, c in enumerate(chunks)]
         )
@@ -243,13 +245,14 @@ def _call_llm(query: str, chunks: List[Chunk]) -> str:
                 "role": "system",
                 "content": (
                     "You answer questions ONLY from the provided transcript excerpts.\n\n"
-                    "STRICT RULES — violating any of these is a failure:\n"
-                    "- You have NO prior knowledge. The excerpts below are the ONLY facts that exist.\n"
-                    "- NEVER state anything not written in the excerpts — not even if you \"know\" it is true.\n"
-                    "- For every claim you make, quote the specific words from the excerpt that support it.\n"
-                    "- If the excerpts do not contain the answer, you MUST say: "
+                    "STRICT RULES:\n"
+                    "1. You have NO prior knowledge. The excerpts below are your ONLY source of truth.\n"
+                    "2. SKIP any excerpt that is not directly relevant to the question.\n"
+                    "3. For every claim, quote the supporting words from the excerpt.\n"
+                    "4. Be concise. Do not pad the answer with tangential information.\n"
+                    "5. If no excerpt answers the question, say: "
                     "\"The provided excerpts do not contain information to answer this question.\"\n"
-                    "- Do NOT guess, infer, or fill gaps with outside knowledge."
+                    "6. Do NOT guess, infer, or fill gaps with outside knowledge."
                 ),
             },
             {
@@ -257,11 +260,9 @@ def _call_llm(query: str, chunks: List[Chunk]) -> str:
                 "content": (
                     f"Question: {query}\n\n"
                     f"TRANSCRIPT EXCERPTS:\n{numbered}\n\n"
-                    f"Instructions:\n"
-                    f"1. Go through EACH excerpt and identify any information relevant to the question.\n"
-                    f"2. For each relevant excerpt, quote the key passage.\n"
-                    f"3. After reviewing ALL excerpts, combine the quoted evidence into a complete answer.\n"
-                    f"4. If no excerpt answers the question, say so — do NOT make anything up."
+                    f"Answer the question using ONLY relevant excerpts. "
+                    f"Ignore excerpts that do not address the question. "
+                    f"Quote key passages and combine into a focused answer."
                 ),
             },
         ]
@@ -443,7 +444,7 @@ def _decompose_query(question: str) -> List[str]:
                 },
                 {"role": "user", "content": question},
             ],
-            num_ctx=2048, timeout=30,
+            num_ctx=2048, timeout=120,
         )
         sub_queries = [q.strip().strip("-•*0123456789.") for q in result.strip().splitlines() if q.strip()]
         sub_queries = [q for q in sub_queries if len(q) >= 5]
@@ -466,20 +467,7 @@ def query(req: QueryRequest) -> QueryResponse:
             raise HTTPException(status_code=500, detail=f"Failed to open collection: {e}")
 
         embed_model = _get_embed_model()
-
-        sub_queries = _decompose_query(req.question)
-        if len(sub_queries) <= 1:
-            chunks = _retrieve(embed_model, col, req.question, req.k)
-        else:
-            all_chunks: List[Chunk] = []
-            seen_keys: set = set()
-            for sq in sub_queries:
-                for c in _retrieve(embed_model, col, sq, req.k):
-                    key = (c.source, c.text[:200])
-                    if key not in seen_keys:
-                        seen_keys.add(key)
-                        all_chunks.append(c)
-            chunks = all_chunks[:req.k]
+        chunks = _retrieve(embed_model, col, req.question, req.k)
 
         used_llm = False
         answer = ""
