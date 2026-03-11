@@ -108,20 +108,89 @@ def retrieve(context_embed_model: SentenceTransformer, collection, query: str, k
     return [f"[source={src} distance={dist}]\n{doc}" for (src, dist, doc) in packed]
 
 
-def call_llm(query: str, chunks: List[str]) -> str:
-    numbered = "\n\n".join(
-        [f"[Excerpt {i+1}]\n{c}" for i, c in enumerate(chunks)]
+def _ollama_chat(messages: list, temperature: float = 0, num_ctx: int = 8192, timeout: int = 300) -> str:
+    resp = requests.post(
+        f"{OLLAMA_BASE_URL}/api/chat",
+        json={"model": OLLAMA_MODEL, "messages": messages, "stream": False,
+              "options": {"temperature": temperature, "num_ctx": num_ctx}},
+        timeout=timeout,
     )
+    resp.raise_for_status()
+    return resp.json().get("message", {}).get("content", "")
+
+
+def call_llm(query: str, chunks: List[str]) -> str:
+    if len(chunks) <= 3:
+        numbered = "\n\n".join([f"[Excerpt {i+1}]\n{c}" for i, c in enumerate(chunks)])
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You answer questions ONLY from the provided transcript excerpts.\n\n"
+                    "STRICT RULES — violating any of these is a failure:\n"
+                    "- You have NO prior knowledge. The excerpts below are the ONLY facts that exist.\n"
+                    "- NEVER state anything not written in the excerpts — not even if you \"know\" it is true.\n"
+                    "- For every claim you make, quote the specific words from the excerpt that support it.\n"
+                    "- If the excerpts do not contain the answer, you MUST say: "
+                    "\"The provided excerpts do not contain information to answer this question.\"\n"
+                    "- Do NOT guess, infer, or fill gaps with outside knowledge."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Question: {query}\n\n"
+                    f"TRANSCRIPT EXCERPTS:\n{numbered}\n\n"
+                    f"Instructions:\n"
+                    f"1. Go through EACH excerpt and identify any information relevant to the question.\n"
+                    f"2. For each relevant excerpt, quote the key passage.\n"
+                    f"3. After reviewing ALL excerpts, combine the quoted evidence into a complete answer.\n"
+                    f"4. If no excerpt answers the question, say so — do NOT make anything up."
+                ),
+            },
+        ]
+        return _ollama_chat(messages)
+
+    # Map-Reduce for 4+ chunks
+    notes_parts = []
+    for i, chunk in enumerate(chunks, 1):
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a precise fact extractor. Given a question and a transcript excerpt, "
+                    "extract ONLY the facts relevant to the question. For each fact, quote the exact "
+                    "words from the excerpt. If the excerpt contains nothing relevant, respond with "
+                    "exactly: NOT_RELEVANT"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Question: {query}\n\n"
+                    f"[Excerpt {i}]\n{chunk}\n\n"
+                    f"Extract relevant facts as bullet points with quotes:"
+                ),
+            },
+        ]
+        extracted = _ollama_chat(messages, num_ctx=4096, timeout=120)
+        if "NOT_RELEVANT" not in extracted.upper():
+            notes_parts.append(f"[From excerpt {i}]\n{extracted}")
+
+    if not notes_parts:
+        return "The provided excerpts do not contain information to answer this question."
+
+    all_notes = "\n\n".join(notes_parts)
     messages = [
         {
             "role": "system",
             "content": (
-                "You answer questions ONLY from the provided transcript excerpts.\n\n"
+                "You answer questions ONLY from the provided extracted notes.\n\n"
                 "STRICT RULES — violating any of these is a failure:\n"
-                "- You have NO prior knowledge. The excerpts below are the ONLY facts that exist.\n"
-                "- NEVER state anything not written in the excerpts — not even if you \"know\" it is true.\n"
-                "- For every claim you make, quote the specific words from the excerpt that support it.\n"
-                "- If the excerpts do not contain the answer, you MUST say: "
+                "- You have NO prior knowledge. The notes below are the ONLY facts that exist.\n"
+                "- NEVER state anything not in the notes — not even if you \"know\" it is true.\n"
+                "- For every claim, include the supporting quote from the notes.\n"
+                "- If the notes do not contain the answer, say: "
                 "\"The provided excerpts do not contain information to answer this question.\"\n"
                 "- Do NOT guess, infer, or fill gaps with outside knowledge."
             ),
@@ -130,22 +199,13 @@ def call_llm(query: str, chunks: List[str]) -> str:
             "role": "user",
             "content": (
                 f"Question: {query}\n\n"
-                f"TRANSCRIPT EXCERPTS:\n{numbered}\n\n"
-                f"Instructions:\n"
-                f"1. Go through EACH excerpt and identify any information relevant to the question.\n"
-                f"2. For each relevant excerpt, quote the key passage.\n"
-                f"3. After reviewing ALL excerpts, combine the quoted evidence into a complete answer.\n"
-                f"4. If no excerpt answers the question, say so — do NOT make anything up."
+                f"EXTRACTED NOTES FROM TRANSCRIPTS:\n{all_notes}\n\n"
+                f"Combine ALL the notes above into a complete, well-organized answer. "
+                f"Include quotes to support each point."
             ),
         },
     ]
-    resp = requests.post(
-        f"{OLLAMA_BASE_URL}/api/chat",
-        json={"model": OLLAMA_MODEL, "messages": messages, "stream": False, "options": {"temperature": 0, "num_ctx": 8192}},
-        timeout=120,
-    )
-    resp.raise_for_status()
-    return resp.json().get("message", {}).get("content", "")
+    return _ollama_chat(messages)
 
 
 def parse_args() -> argparse.Namespace:

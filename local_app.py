@@ -156,20 +156,53 @@ def _retrieve(embed_model: SentenceTransformer, collection: Any, query: str, k: 
     return out[:k]
 
 
-def _call_llm(query: str, chunks: List[Chunk]) -> str:
-    numbered = "\n\n".join(
-        [f"[Excerpt {i+1} | source: {c.source}]\n{c.text}" for i, c in enumerate(chunks)]
+def _ollama_chat(messages: list, temperature: float = 0, num_ctx: int = 8192, timeout: int = 300) -> str:
+    resp = requests.post(
+        f"{OLLAMA_BASE_URL}/api/chat",
+        json={"model": OLLAMA_MODEL, "messages": messages, "stream": False,
+              "options": {"temperature": temperature, "num_ctx": num_ctx}},
+        timeout=timeout,
     )
+    resp.raise_for_status()
+    return resp.json().get("message", {}).get("content", "")
+
+
+def _map_extract(query: str, chunk: Chunk, index: int) -> str:
+    """Map step: extract relevant facts and quotes from a single chunk."""
     messages = [
         {
             "role": "system",
             "content": (
-                "You answer questions ONLY from the provided transcript excerpts.\n\n"
+                "You are a precise fact extractor. Given a question and a transcript excerpt, "
+                "extract ONLY the facts relevant to the question. For each fact, quote the exact "
+                "words from the excerpt. If the excerpt contains nothing relevant, respond with "
+                "exactly: NOT_RELEVANT"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Question: {query}\n\n"
+                f"[Excerpt {index} | source: {chunk.source}]\n{chunk.text}\n\n"
+                f"Extract relevant facts as bullet points with quotes:"
+            ),
+        },
+    ]
+    return _ollama_chat(messages, num_ctx=4096, timeout=120)
+
+
+def _reduce_synthesize(query: str, extracted_notes: str) -> str:
+    """Reduce step: synthesize a complete answer from extracted notes."""
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You answer questions ONLY from the provided extracted notes.\n\n"
                 "STRICT RULES — violating any of these is a failure:\n"
-                "- You have NO prior knowledge. The excerpts below are the ONLY facts that exist.\n"
-                "- NEVER state anything not written in the excerpts — not even if you \"know\" it is true.\n"
-                "- For every claim you make, quote the specific words from the excerpt that support it.\n"
-                "- If the excerpts do not contain the answer, you MUST say: "
+                "- You have NO prior knowledge. The notes below are the ONLY facts that exist.\n"
+                "- NEVER state anything not in the notes — not even if you \"know\" it is true.\n"
+                "- For every claim, include the supporting quote from the notes.\n"
+                "- If the notes do not contain the answer, say: "
                 "\"The provided excerpts do not contain information to answer this question.\"\n"
                 "- Do NOT guess, infer, or fill gaps with outside knowledge."
             ),
@@ -178,22 +211,61 @@ def _call_llm(query: str, chunks: List[Chunk]) -> str:
             "role": "user",
             "content": (
                 f"Question: {query}\n\n"
-                f"TRANSCRIPT EXCERPTS:\n{numbered}\n\n"
-                f"Instructions:\n"
-                f"1. Go through EACH excerpt and identify any information relevant to the question.\n"
-                f"2. For each relevant excerpt, quote the key passage.\n"
-                f"3. After reviewing ALL excerpts, combine the quoted evidence into a complete answer.\n"
-                f"4. If no excerpt answers the question, say so — do NOT make anything up."
+                f"EXTRACTED NOTES FROM TRANSCRIPTS:\n{extracted_notes}\n\n"
+                f"Combine ALL the notes above into a complete, well-organized answer. "
+                f"Include quotes to support each point."
             ),
         },
     ]
-    resp = requests.post(
-        f"{OLLAMA_BASE_URL}/api/chat",
-        json={"model": OLLAMA_MODEL, "messages": messages, "stream": False, "options": {"temperature": 0, "num_ctx": 8192}},
-        timeout=300,
-    )
-    resp.raise_for_status()
-    return resp.json().get("message", {}).get("content", "")
+    return _ollama_chat(messages, num_ctx=8192, timeout=300)
+
+
+def _call_llm(query: str, chunks: List[Chunk]) -> str:
+    if len(chunks) <= 3:
+        numbered = "\n\n".join(
+            [f"[Excerpt {i+1} | source: {c.source}]\n{c.text}" for i, c in enumerate(chunks)]
+        )
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You answer questions ONLY from the provided transcript excerpts.\n\n"
+                    "STRICT RULES — violating any of these is a failure:\n"
+                    "- You have NO prior knowledge. The excerpts below are the ONLY facts that exist.\n"
+                    "- NEVER state anything not written in the excerpts — not even if you \"know\" it is true.\n"
+                    "- For every claim you make, quote the specific words from the excerpt that support it.\n"
+                    "- If the excerpts do not contain the answer, you MUST say: "
+                    "\"The provided excerpts do not contain information to answer this question.\"\n"
+                    "- Do NOT guess, infer, or fill gaps with outside knowledge."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Question: {query}\n\n"
+                    f"TRANSCRIPT EXCERPTS:\n{numbered}\n\n"
+                    f"Instructions:\n"
+                    f"1. Go through EACH excerpt and identify any information relevant to the question.\n"
+                    f"2. For each relevant excerpt, quote the key passage.\n"
+                    f"3. After reviewing ALL excerpts, combine the quoted evidence into a complete answer.\n"
+                    f"4. If no excerpt answers the question, say so — do NOT make anything up."
+                ),
+            },
+        ]
+        return _ollama_chat(messages)
+
+    # Map-Reduce for 4+ chunks: extract per-chunk, then synthesize.
+    notes_parts = []
+    for i, chunk in enumerate(chunks, 1):
+        extracted = _map_extract(query, chunk, i)
+        if "NOT_RELEVANT" not in extracted.upper():
+            notes_parts.append(f"[From excerpt {i} | source: {chunk.source}]\n{extracted}")
+
+    if not notes_parts:
+        return "The provided excerpts do not contain information to answer this question."
+
+    all_notes = "\n\n".join(notes_parts)
+    return _reduce_synthesize(query, all_notes)
 
 
 app = FastAPI(title="Dama RAG (local)")
