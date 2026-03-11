@@ -424,6 +424,36 @@ def build_index() -> BuildResponse:
             raise HTTPException(status_code=500, detail=str(e))
 
 
+def _decompose_query(question: str) -> List[str]:
+    """Split a complex question into 2-3 simpler sub-queries for better retrieval."""
+    word_count = len(question.split())
+    if word_count <= 8:
+        return [question]
+
+    try:
+        result = _ollama_chat(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "You decompose complex questions into simpler sub-queries for a search engine. "
+                        "Output 2-3 short search queries, one per line. No numbering, no bullets, "
+                        "just the queries. If the question is already simple, output it unchanged."
+                    ),
+                },
+                {"role": "user", "content": question},
+            ],
+            num_ctx=2048, timeout=30,
+        )
+        sub_queries = [q.strip().strip("-•*0123456789.") for q in result.strip().splitlines() if q.strip()]
+        sub_queries = [q for q in sub_queries if len(q) >= 5]
+        if not sub_queries:
+            return [question]
+        return sub_queries[:3]
+    except Exception:
+        return [question]
+
+
 @app.post("/api/query", response_model=QueryResponse)
 def query(req: QueryRequest) -> QueryResponse:
     with _lock:
@@ -436,7 +466,20 @@ def query(req: QueryRequest) -> QueryResponse:
             raise HTTPException(status_code=500, detail=f"Failed to open collection: {e}")
 
         embed_model = _get_embed_model()
-        chunks = _retrieve(embed_model, col, req.question, req.k)
+
+        sub_queries = _decompose_query(req.question)
+        if len(sub_queries) <= 1:
+            chunks = _retrieve(embed_model, col, req.question, req.k)
+        else:
+            all_chunks: List[Chunk] = []
+            seen_keys: set = set()
+            for sq in sub_queries:
+                for c in _retrieve(embed_model, col, sq, req.k):
+                    key = (c.source, c.text[:200])
+                    if key not in seen_keys:
+                        seen_keys.add(key)
+                        all_chunks.append(c)
+            chunks = all_chunks[:req.k]
 
         used_llm = False
         answer = ""
