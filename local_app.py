@@ -1,0 +1,381 @@
+import threading
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import re
+import requests
+import chromadb
+from chromadb.config import Settings
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field
+from sentence_transformers import SentenceTransformer
+
+import build_index as build_index_module
+
+
+BASE_DIR = Path(__file__).resolve().parent
+PERSIST_DIR = BASE_DIR / "rag_index"
+COLLECTION_NAME = "dama_transcripts"
+OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_MODEL = "qwen2.5:14b"
+
+
+class QueryRequest(BaseModel):
+    question: str = Field(min_length=1)
+    k: int = Field(default=5, ge=1, le=20)
+    use_llm: bool = Field(default=True)
+
+
+class Chunk(BaseModel):
+    source: str = ""
+    distance: Optional[float] = None
+    text: str
+
+
+class QueryResponse(BaseModel):
+    chunks: List[Chunk]
+    answer: str = ""
+    used_llm: bool = False
+
+
+class BuildResponse(BaseModel):
+    ok: bool
+    collection_count: int
+
+
+def _get_collection() -> Any:
+    client = chromadb.PersistentClient(
+        path=str(PERSIST_DIR),
+        settings=Settings(anonymized_telemetry=False),
+    )
+    return client.get_collection(COLLECTION_NAME)
+
+_STOPWORDS = frozenset(
+    "a an and are as at be but by do for from get got has have he her him his how "
+    "if in into is it its just me my no nor not now of on or our out own she so "
+    "some than that the their them then there these they this those through to too "
+    "very was we were what when where which who will with would you your".split()
+)
+
+
+def _tokenize_query(q: str) -> List[str]:
+    tokens = [
+        t for t in re.findall(r"[a-zA-Z0-9']+", (q or "").lower())
+        if len(t) >= 3 and t not in _STOPWORDS
+    ]
+    return tokens[:12]
+
+
+def _lexical_score(query: str, chunk_text: str) -> int:
+    q = (query or "").strip().lower()
+    if not q or not chunk_text:
+        return 0
+    text = str(chunk_text).lower()
+
+    score = 0
+    if len(q) <= 60 and q in text:
+        score += 100
+
+    tokens = _tokenize_query(q)
+    if tokens:
+        matched = sum(1 for t in tokens if t in text)
+        ratio = matched / len(tokens)
+        # Only boost when majority of meaningful terms match.
+        if ratio >= 0.6:
+            score += int(ratio * 20)
+    return score
+
+
+def _retrieve(embed_model: SentenceTransformer, collection: Any, query: str, k: int) -> List[Chunk]:
+    q_emb = embed_model.encode([query])[0].tolist()
+    # Pull extra candidates, then rerank. Embedding-only search often misses
+    # exact keyword/phrase matches for short queries.
+    n_candidates = min(max(k * 10, 50), 200)
+    results: Dict[str, Any] = collection.query(
+        query_embeddings=[q_emb],
+        n_results=n_candidates,
+        include=["documents", "metadatas", "distances"],
+    )
+    docs = results.get("documents", [[]])[0]
+    metas = results.get("metadatas", [[]])[0]
+    dists = results.get("distances", [[]])[0]
+
+    out: List[Chunk] = []
+    for doc, meta, dist in zip(docs, metas, dists):
+        src = ""
+        if isinstance(meta, dict):
+            src = str(meta.get("source") or "")
+        out.append(Chunk(source=src, distance=float(dist) if dist is not None else None, text=str(doc)))
+
+    # Keyword fallback: also pull chunks that literally contain query terms.
+    # This is critical for short keyword searches like "thai forest".
+    phrase = (query or "").strip().lower()
+    terms = []
+    if phrase and len(phrase) <= 60 and len(phrase.split()) >= 2:
+        terms.append(phrase)
+    terms.extend(_tokenize_query(query))
+    terms = list(dict.fromkeys([t for t in terms if t]))  # stable unique
+
+    seen_keys = set()
+    for c in out:
+        seen_keys.add((c.source, c.text[:200]))  # best-effort dedupe
+
+    for t in terms[:6]:
+        try:
+            # Chroma supports document substring filtering with where_document.
+            # We use `get()` so we don't need another embedding query.
+            got = collection.get(
+                where_document={"$contains": t},
+                include=["documents", "metadatas"],
+                limit=min(200, max(50, k * 20)),
+            )
+        except Exception:
+            continue
+
+        k_docs = (got or {}).get("documents", []) or []
+        k_metas = (got or {}).get("metadatas", []) or []
+        for doc, meta in zip(k_docs, k_metas):
+            src = ""
+            if isinstance(meta, dict):
+                src = str(meta.get("source") or "")
+            text = str(doc)
+            key = (src, text[:200])
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            out.append(Chunk(source=src, distance=None, text=text))
+
+    # Rerank: lexical hits first, then by embedding distance.
+    out.sort(
+        key=lambda c: (
+            -_lexical_score(query, c.text),
+            c.distance if c.distance is not None else 1e9,
+        )
+    )
+    return out[:k]
+
+
+def _call_llm(query: str, chunks: List[Chunk]) -> str:
+    numbered = "\n\n".join(
+        [f"[Excerpt {i+1} | source: {c.source}]\n{c.text}" for i, c in enumerate(chunks)]
+    )
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You answer questions ONLY from the provided transcript excerpts.\n\n"
+                "STRICT RULES — violating any of these is a failure:\n"
+                "- You have NO prior knowledge. The excerpts below are the ONLY facts that exist.\n"
+                "- NEVER state anything not written in the excerpts — not even if you \"know\" it is true.\n"
+                "- For every claim you make, quote the specific words from the excerpt that support it.\n"
+                "- If the excerpts do not contain the answer, you MUST say: "
+                "\"The provided excerpts do not contain information to answer this question.\"\n"
+                "- Do NOT guess, infer, or fill gaps with outside knowledge."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Question: {query}\n\n"
+                f"TRANSCRIPT EXCERPTS:\n{numbered}\n\n"
+                f"Instructions:\n"
+                f"1. Go through EACH excerpt and identify any information relevant to the question.\n"
+                f"2. For each relevant excerpt, quote the key passage.\n"
+                f"3. After reviewing ALL excerpts, combine the quoted evidence into a complete answer.\n"
+                f"4. If no excerpt answers the question, say so — do NOT make anything up."
+            ),
+        },
+    ]
+    resp = requests.post(
+        f"{OLLAMA_BASE_URL}/api/chat",
+        json={"model": OLLAMA_MODEL, "messages": messages, "stream": False, "options": {"temperature": 0, "num_ctx": 8192}},
+        timeout=300,
+    )
+    resp.raise_for_status()
+    return resp.json().get("message", {}).get("content", "")
+
+
+app = FastAPI(title="Dama RAG (local)")
+
+_lock = threading.RLock()
+_embed_model: Optional[SentenceTransformer] = None
+
+
+def _get_embed_model() -> SentenceTransformer:
+    global _embed_model
+    if _embed_model is None:
+        _embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+    return _embed_model
+
+
+@app.get("/", response_class=HTMLResponse)
+def home() -> str:
+    # Minimal single-file UI so you can just run and use it.
+    return """
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dama RAG (local)</title>
+    <style>
+      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 24px; max-width: 980px; }
+      h1 { margin: 0 0 12px; }
+      .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
+      input[type="text"] { flex: 1; min-width: 280px; padding: 10px 12px; font-size: 14px; }
+      input[type="number"] { width: 90px; padding: 10px 8px; }
+      button { padding: 10px 14px; font-size: 14px; cursor: pointer; }
+      .muted { color: #666; font-size: 13px; }
+      .box { border: 1px solid #ddd; border-radius: 10px; padding: 12px; margin-top: 12px; }
+      pre { white-space: pre-wrap; word-break: break-word; margin: 0; }
+      .chunk { margin-top: 10px; padding-top: 10px; border-top: 1px dashed #ddd; }
+      .src { font-size: 12px; color: #444; margin-bottom: 6px; }
+    </style>
+  </head>
+  <body>
+    <h1>Dama RAG (local)</h1>
+    <div class="muted">Ask questions against your transcript index. Use “Rebuild Index” if you add/change transcript files.</div>
+
+    <div class="row">
+      <input id="q" type="text" placeholder="Ask a question…" />
+      <label class="muted">k</label>
+      <input id="k" type="number" min="1" max="20" value="5" />
+      <label class="muted"><input id="use_llm" type="checkbox" checked /> use Ollama LLM</label>
+      <button id="ask">Ask</button>
+      <button id="rebuild">Rebuild Index</button>
+    </div>
+
+    <div id="status" class="muted"></div>
+    <div id="answer" class="box" style="display:none"></div>
+    <div id="chunks" class="box" style="display:none"></div>
+
+    <script>
+      const statusEl = document.getElementById('status');
+      const answerEl = document.getElementById('answer');
+      const chunksEl = document.getElementById('chunks');
+
+      function setStatus(s) { statusEl.textContent = s; }
+      function esc(s) { return (s ?? '').toString().replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+      async function ask() {
+        const question = document.getElementById('q').value.trim();
+        const k = parseInt(document.getElementById('k').value || '5', 10);
+        const use_llm = document.getElementById('use_llm').checked;
+        if (!question) return;
+
+        answerEl.style.display = 'none';
+        chunksEl.style.display = 'none';
+        setStatus('Asking…');
+
+        const res = await fetch('/api/query', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question, k, use_llm })
+        });
+
+        if (!res.ok) {
+          const t = await res.text();
+          setStatus('Error: ' + t);
+          return;
+        }
+
+        const data = await res.json();
+        setStatus(data.used_llm ? 'Done (LLM answer generated).' : 'Done (retrieval only).');
+
+        answerEl.innerHTML = '<h3>Answer</h3><pre>' + esc(data.answer || '(no answer)') + '</pre>';
+        answerEl.style.display = 'block';
+
+        let html = '<h3>Top matching chunks</h3>';
+        for (const c of (data.chunks || [])) {
+          html += '<div class="chunk">';
+          html += '<div class="src"><b>source</b>: ' + esc(c.source) + (c.distance != null ? (' &nbsp; <b>distance</b>: ' + esc(c.distance)) : '') + '</div>';
+          html += '<pre>' + esc(c.text) + '</pre>';
+          html += '</div>';
+        }
+        chunksEl.innerHTML = html;
+        chunksEl.style.display = 'block';
+      }
+
+      async function rebuild() {
+        answerEl.style.display = 'none';
+        chunksEl.style.display = 'none';
+        setStatus('Rebuilding index… (this can take a bit)');
+        const res = await fetch('/api/build', { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setStatus('Rebuild error: ' + (data.detail || JSON.stringify(data)));
+          return;
+        }
+        setStatus('Index rebuilt. collection_count=' + data.collection_count);
+      }
+
+      document.getElementById('ask').addEventListener('click', ask);
+      document.getElementById('rebuild').addEventListener('click', rebuild);
+      document.getElementById('q').addEventListener('keydown', (e) => { if (e.key === 'Enter') ask(); });
+    </script>
+  </body>
+</html>
+"""
+
+
+@app.post("/api/build", response_model=BuildResponse)
+def build_index() -> BuildResponse:
+    with _lock:
+        try:
+            # Rebuild the persistent collection on disk.
+            build_index_module.main()
+            col = _get_collection()
+            return BuildResponse(ok=True, collection_count=int(col.count()))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/query", response_model=QueryResponse)
+def query(req: QueryRequest) -> QueryResponse:
+    with _lock:
+        if not PERSIST_DIR.exists():
+            raise HTTPException(status_code=400, detail="Index not found. Click Rebuild Index first.")
+
+        try:
+            col = _get_collection()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to open collection: {e}")
+
+        embed_model = _get_embed_model()
+        chunks = _retrieve(embed_model, col, req.question, req.k)
+
+        used_llm = False
+        answer = ""
+        if req.use_llm:
+            used_llm = True
+            # Expand context: pull all chunks from the primary source file
+            # so the LLM sees the full lecture argument, not just isolated hits.
+            llm_chunks = list(chunks)
+            seen = set((c.source, c.text[:200]) for c in llm_chunks)
+            primary_src = chunks[0].source if chunks else ""
+            if primary_src:
+                try:
+                    got = col.get(
+                        where={"source": primary_src},
+                        include=["documents", "metadatas"],
+                        limit=50,
+                    )
+                    for doc, meta in zip(got.get("documents", []), got.get("metadatas", [])):
+                        src = str(meta.get("source", "")) if isinstance(meta, dict) else ""
+                        text = str(doc)
+                        key = (src, text[:200])
+                        if key not in seen:
+                            seen.add(key)
+                            llm_chunks.append(Chunk(source=src, text=text))
+                except Exception:
+                    pass
+            # Cap LLM context to avoid overwhelming the model.
+            llm_chunks = llm_chunks[:8]
+            try:
+                answer = _call_llm(req.question, llm_chunks)
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=f"Ollama LLM call failed: {e}")
+
+        return QueryResponse(chunks=chunks, answer=answer, used_llm=used_llm)
+
