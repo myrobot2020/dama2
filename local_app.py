@@ -1,4 +1,11 @@
+import json
+import os
+import sqlite3
 import threading
+import time
+import uuid
+from contextlib import asynccontextmanager, contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -16,15 +23,37 @@ import build_index as build_index_module
 
 BASE_DIR = Path(__file__).resolve().parent
 PERSIST_DIR = BASE_DIR / "rag_index"
+DATA_DIR = BASE_DIR / "data"
+DB_PATH = DATA_DIR / "conversations.db"
 COLLECTION_NAME = "dama_transcripts"
 OLLAMA_BASE_URL = "http://localhost:11434"
-OLLAMA_MODEL = "mistral:instruct"
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "mistral:instruct")
+
+_STATIC_INDEX = BASE_DIR / "static" / "index.html"
+_index_html_cache: Optional[str] = None
+
+
+def _get_index_html() -> str:
+    global _index_html_cache
+    if _index_html_cache is None:
+        if not _STATIC_INDEX.is_file():
+            return (
+                "<!doctype html><html><body><h1>Missing UI file</h1>"
+                "<p>Expected <code>static/index.html</code> beside the app. Restore it from the repo.</p></body></html>"
+            )
+        _index_html_cache = _STATIC_INDEX.read_text(encoding="utf-8")
+    return _index_html_cache
 
 
 class QueryRequest(BaseModel):
     question: str = Field(min_length=1)
     k: int = Field(default=5, ge=1, le=20)
     use_llm: bool = Field(default=True)
+    session_id: Optional[str] = Field(default=None)
+
+
+class SessionCreateResponse(BaseModel):
+    session_id: str
 
 
 class Chunk(BaseModel):
@@ -37,11 +66,34 @@ class QueryResponse(BaseModel):
     chunks: List[Chunk]
     answer: str = ""
     used_llm: bool = False
+    elapsed_ms: float = Field(description="Total server-side time for this request in milliseconds")
+    rewrite_ms: float = Field(
+        default=0,
+        description="Ollama query-rewrite time for chat follow-ups (ms); 0 if unused",
+    )
+    retrieval_ms: float = Field(
+        default=0,
+        description="Embedding search + rerank in _retrieve (ms)",
+    )
+    context_ms: float = Field(
+        default=0,
+        description="Extra Chroma fetch of chunks from the primary source file before LLM (ms); 0 if LLM off",
+    )
+    llm_ms: float = Field(
+        default=0,
+        description="Ollama answer generation / map-reduce (ms); 0 if LLM off",
+    )
 
 
 class BuildResponse(BaseModel):
     ok: bool
     collection_count: int
+
+
+class OllamaBenchResponse(BaseModel):
+    ok: bool
+    ollama_ms: float = Field(description="Wall time for one minimal Ollama chat completion (ms)")
+    model: str = ""
 
 
 def _get_collection() -> Any:
@@ -282,7 +334,112 @@ def _call_llm(query: str, chunks: List[Chunk]) -> str:
     return _reduce_synthesize(query, all_notes)
 
 
-app = FastAPI(title="Dama RAG (local)")
+def _init_db() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(str(DB_PATH), timeout=60.0) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                title TEXT
+            );
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES sessions(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
+            """
+        )
+        conn.commit()
+
+
+@contextmanager
+def _db_conn():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=60.0)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _session_exists(conn: sqlite3.Connection, session_id: str) -> bool:
+    row = conn.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    return row is not None
+
+
+def _load_recent_messages(conn: sqlite3.Connection, session_id: str, limit: int = 10) -> List[Dict[str, str]]:
+    rows = conn.execute(
+        "SELECT role, content FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT ?",
+        (session_id, limit),
+    ).fetchall()
+    rows = list(reversed(rows))
+    return [{"role": str(r["role"]), "content": str(r["content"])} for r in rows]
+
+
+def _append_exchange(conn: sqlite3.Connection, session_id: str, user_q: str, assistant_a: str) -> None:
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    conn.execute(
+        "INSERT INTO messages (session_id, role, content, created_at) VALUES (?, 'user', ?, ?)",
+        (session_id, user_q, now),
+    )
+    conn.execute(
+        "INSERT INTO messages (session_id, role, content, created_at) VALUES (?, 'assistant', ?, ?)",
+        (session_id, assistant_a, now),
+    )
+
+
+def _rewrite_query_for_search(history: List[Dict[str, str]], new_question: str) -> str:
+    lines: List[str] = []
+    for m in history[-10:]:
+        role = m.get("role", "")
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        label = "User" if role == "user" else "Assistant"
+        lines.append(f"{label}: {content}")
+    transcript = "\n".join(lines)
+    if len(transcript) > 1500:
+        transcript = transcript[-1500:]
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You rewrite follow-up messages into one standalone search query for a Buddhist "
+                "transcript library. Resolve pronouns and implicit references using the conversation. "
+                "Output ONLY the search query text — no quotes, labels, or explanation."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Recent conversation:\n{transcript}\n\nNew user message: {new_question}\n\n"
+                f"Standalone search query:"
+            ),
+        },
+    ]
+    try:
+        raw = _ollama_chat(messages, temperature=0, num_ctx=2048, timeout=120)
+    except Exception:
+        return new_question
+    q = (raw or "").strip().strip('"').strip("'").split("\n")[0].strip()
+    return q if len(q) >= 3 else new_question
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    _init_db()
+    yield
+
+
+app = FastAPI(title="Dama RAG (local)", lifespan=lifespan)
 
 _lock = threading.RLock()
 _embed_model: Optional[SentenceTransformer] = None
@@ -304,113 +461,11 @@ def _get_reranker() -> CrossEncoder:
 
 
 @app.get("/", response_class=HTMLResponse)
-def home() -> str:
-    # Minimal single-file UI so you can just run and use it.
-    return """
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Dama RAG (local)</title>
-    <style>
-      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 24px; max-width: 980px; }
-      h1 { margin: 0 0 12px; }
-      .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
-      input[type="text"] { flex: 1; min-width: 280px; padding: 10px 12px; font-size: 14px; }
-      input[type="number"] { width: 90px; padding: 10px 8px; }
-      button { padding: 10px 14px; font-size: 14px; cursor: pointer; }
-      .muted { color: #666; font-size: 13px; }
-      .box { border: 1px solid #ddd; border-radius: 10px; padding: 12px; margin-top: 12px; }
-      pre { white-space: pre-wrap; word-break: break-word; margin: 0; }
-      .chunk { margin-top: 10px; padding-top: 10px; border-top: 1px dashed #ddd; }
-      .src { font-size: 12px; color: #444; margin-bottom: 6px; }
-    </style>
-  </head>
-  <body>
-    <h1>Dama RAG (local)</h1>
-    <div class="muted">Ask questions against your transcript index. Use “Rebuild Index” if you add/change transcript files.</div>
-
-    <div class="row">
-      <input id="q" type="text" placeholder="Ask a question…" />
-      <label class="muted">k</label>
-      <input id="k" type="number" min="1" max="20" value="5" />
-      <label class="muted"><input id="use_llm" type="checkbox" checked /> use Ollama LLM</label>
-      <button id="ask">Ask</button>
-      <button id="rebuild">Rebuild Index</button>
-    </div>
-
-    <div id="status" class="muted"></div>
-    <div id="answer" class="box" style="display:none"></div>
-    <div id="chunks" class="box" style="display:none"></div>
-
-    <script>
-      const statusEl = document.getElementById('status');
-      const answerEl = document.getElementById('answer');
-      const chunksEl = document.getElementById('chunks');
-
-      function setStatus(s) { statusEl.textContent = s; }
-      function esc(s) { return (s ?? '').toString().replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-
-      async function ask() {
-        const question = document.getElementById('q').value.trim();
-        const k = parseInt(document.getElementById('k').value || '5', 10);
-        const use_llm = document.getElementById('use_llm').checked;
-        if (!question) return;
-
-        answerEl.style.display = 'none';
-        chunksEl.style.display = 'none';
-        setStatus('Asking…');
-
-        const res = await fetch('/api/query', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question, k, use_llm })
-        });
-
-        if (!res.ok) {
-          const t = await res.text();
-          setStatus('Error: ' + t);
-          return;
-        }
-
-        const data = await res.json();
-        setStatus(data.used_llm ? 'Done (LLM answer generated).' : 'Done (retrieval only).');
-
-        answerEl.innerHTML = '<h3>Answer</h3><pre>' + esc(data.answer || '(no answer)') + '</pre>';
-        answerEl.style.display = 'block';
-
-        let html = '<h3>Top matching chunks</h3>';
-        for (const c of (data.chunks || [])) {
-          html += '<div class="chunk">';
-          html += '<div class="src"><b>source</b>: ' + esc(c.source) + (c.distance != null ? (' &nbsp; <b>distance</b>: ' + esc(c.distance)) : '') + '</div>';
-          html += '<pre>' + esc(c.text) + '</pre>';
-          html += '</div>';
-        }
-        chunksEl.innerHTML = html;
-        chunksEl.style.display = 'block';
-      }
-
-      async function rebuild() {
-        answerEl.style.display = 'none';
-        chunksEl.style.display = 'none';
-        setStatus('Rebuilding index… (this can take a bit)');
-        const res = await fetch('/api/build', { method: 'POST' });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          setStatus('Rebuild error: ' + (data.detail || JSON.stringify(data)));
-          return;
-        }
-        setStatus('Index rebuilt. collection_count=' + data.collection_count);
-      }
-
-      document.getElementById('ask').addEventListener('click', ask);
-      document.getElementById('rebuild').addEventListener('click', rebuild);
-      document.getElementById('q').addEventListener('keydown', (e) => { if (e.key === 'Enter') ask(); });
-    </script>
-  </body>
-</html>
-"""
+def home() -> HTMLResponse:
+    return HTMLResponse(
+        content=_get_index_html(),
+        media_type="text/html; charset=utf-8",
+    )
 
 
 @app.post("/api/build", response_model=BuildResponse)
@@ -455,9 +510,37 @@ def _decompose_query(question: str) -> List[str]:
         return [question]
 
 
+@app.post("/api/sessions", response_model=SessionCreateResponse)
+def create_session_api() -> SessionCreateResponse:
+    with _lock:
+        sid = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        with _db_conn() as conn:
+            conn.execute("INSERT INTO sessions (id, created_at, title) VALUES (?, ?, NULL)", (sid, now))
+        return SessionCreateResponse(session_id=sid)
+
+
+@app.get("/api/ollama-bench", response_model=OllamaBenchResponse)
+def ollama_bench() -> OllamaBenchResponse:
+    """One minimal chat completion to measure local Ollama round-trip latency."""
+    _t0 = time.perf_counter()
+    try:
+        _ollama_chat(
+            [{"role": "user", "content": "Reply with exactly the single word: OK"}],
+            temperature=0,
+            num_ctx=256,
+            timeout=120,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Ollama failed: {e}")
+    ms = (time.perf_counter() - _t0) * 1000
+    return OllamaBenchResponse(ok=True, ollama_ms=round(ms, 2), model=OLLAMA_MODEL)
+
+
 @app.post("/api/query", response_model=QueryResponse)
 def query(req: QueryRequest) -> QueryResponse:
     with _lock:
+        _q_wall0 = time.perf_counter()
         if not PERSIST_DIR.exists():
             raise HTTPException(status_code=400, detail="Index not found. Click Rebuild Index first.")
 
@@ -466,11 +549,31 @@ def query(req: QueryRequest) -> QueryResponse:
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to open collection: {e}")
 
+        history: List[Dict[str, str]] = []
+        retrieval_q = req.question
+        _rewrite_ms = 0.0
+        if req.session_id:
+            with _db_conn() as conn:
+                if not _session_exists(conn, req.session_id):
+                    raise HTTPException(status_code=400, detail="Unknown session_id. Create a session first.")
+                history = _load_recent_messages(conn, req.session_id, limit=10)
+            if history:
+                _trw = time.perf_counter()
+                retrieval_q = _rewrite_query_for_search(history, req.question)
+                _rewrite_ms = (time.perf_counter() - _trw) * 1000
+
+        llm_question = req.question
+        if history:
+            llm_question = f"User follow-up (may refer to prior discussion): {req.question}"
+
         embed_model = _get_embed_model()
-        chunks = _retrieve(embed_model, col, req.question, req.k)
+        _t_r0 = time.perf_counter()
+        chunks = _retrieve(embed_model, col, retrieval_q, req.k)
+        _retrieve_total_ms = (time.perf_counter() - _t_r0) * 1000
 
         used_llm = False
         answer = ""
+        _expand_ms = 0.0
         if req.use_llm:
             used_llm = True
             # Expand context: pull all chunks from the primary source file
@@ -480,6 +583,7 @@ def query(req: QueryRequest) -> QueryResponse:
             primary_src = chunks[0].source if chunks else ""
             if primary_src:
                 try:
+                    _t_ex = time.perf_counter()
                     got = col.get(
                         where={"source": primary_src},
                         include=["documents", "metadatas"],
@@ -492,14 +596,33 @@ def query(req: QueryRequest) -> QueryResponse:
                         if key not in seen:
                             seen.add(key)
                             llm_chunks.append(Chunk(source=src, text=text))
+                    _expand_ms = (time.perf_counter() - _t_ex) * 1000
                 except Exception:
                     pass
             # Cap LLM context to avoid overwhelming the model.
             llm_chunks = llm_chunks[:8]
             try:
-                answer = _call_llm(req.question, llm_chunks)
+                _t_llm = time.perf_counter()
+                answer = _call_llm(llm_question, llm_chunks)
+                _llm_ms = (time.perf_counter() - _t_llm) * 1000
             except Exception as e:
                 raise HTTPException(status_code=502, detail=f"Ollama LLM call failed: {e}")
+        else:
+            _llm_ms = 0.0
 
-        return QueryResponse(chunks=chunks, answer=answer, used_llm=used_llm)
+        if req.session_id:
+            with _db_conn() as conn:
+                _append_exchange(conn, req.session_id, req.question, answer)
+
+        _elapsed_ms = round((time.perf_counter() - _q_wall0) * 1000, 2)
+        return QueryResponse(
+            chunks=chunks,
+            answer=answer,
+            used_llm=used_llm,
+            elapsed_ms=_elapsed_ms,
+            rewrite_ms=round(_rewrite_ms, 2),
+            retrieval_ms=round(_retrieve_total_ms, 2),
+            context_ms=round(_expand_ms, 2),
+            llm_ms=round(_llm_ms, 2),
+        )
 

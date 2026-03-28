@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dama RAG (local)</title>
+    <style>
+      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 24px; max-width: 980px; }
+      h1 { margin: 0 0 12px; }
+      .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
+      input[type="text"] { flex: 1; min-width: 280px; padding: 10px 12px; font-size: 14px; }
+      input[type="number"] { width: 90px; padding: 10px 8px; }
+      button { padding: 10px 14px; font-size: 14px; cursor: pointer; }
+      .muted { color: #666; font-size: 13px; }
+      .box { border: 1px solid #ddd; border-radius: 10px; padding: 12px; margin-top: 12px; }
+      pre { white-space: pre-wrap; word-break: break-word; margin: 0; }
+      .chunk { margin-top: 10px; padding-top: 10px; border-top: 1px dashed #ddd; }
+      .src { font-size: 12px; color: #444; margin-bottom: 6px; }
+      .thread { max-height: 42vh; overflow-y: auto; border: 1px solid #e5e5e5; border-radius: 10px; padding: 12px; margin: 12px 0; background: #fafafa; }
+      .msg { margin-bottom: 14px; padding: 10px 12px; border-radius: 8px; max-width: 95%; }
+      .msg.user { background: #e8f0fe; margin-left: 0; }
+      .msg.assistant { background: #fff; border: 1px solid #e0e0e0; margin-left: auto; }
+      .msg .who { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: #666; margin-bottom: 6px; }
+      .msg pre { font-family: inherit; font-size: 14px; white-space: pre-wrap; word-break: break-word; margin: 0; }
+      .msg-meta { font-size: 12px; color: #888; margin-top: 8px; }
+      .status-row { display: flex; align-items: center; gap: 10px; min-height: 24px; margin-top: 8px; }
+      .spinner {
+        display: none;
+        width: 18px;
+        height: 18px;
+        border: 2px solid #ddd;
+        border-top-color: #333;
+        border-radius: 50%;
+        animation: dama-spin 0.65s linear infinite;
+        flex-shrink: 0;
+      }
+      .spinner.visible { display: inline-block; }
+      @keyframes dama-spin { to { transform: rotate(360deg); } }
+      button:disabled { opacity: 0.55; cursor: not-allowed; }
+    </style>
+  </head>
+  <body>
+    <h1>Dama RAG (local)</h1>
+    <div class="muted">Ask questions against your transcript index. Chats are saved per session. Use &ldquo;Rebuild Index&rdquo; if you add or change transcript files.</div>
+    <div class="muted" style="margin-top:10px; font-size:12px; line-height:1.45;">
+      <strong>Ollama speed</strong> sends one minimal prompt to your local <a href="https://ollama.com" target="_blank" rel="noopener noreferrer">Ollama</a> API (<code>localhost:11434</code>) and shows how many seconds that took &mdash; useful to see if the LLM is reachable.
+      <strong>Generated answers</strong> need Ollama running, the model pulled (e.g. <code>ollama pull mistral:instruct</code> or set env <code>OLLAMA_MODEL</code>), and <strong>use Ollama LLM</strong> checked.
+      The server log lines about <code>BertModel</code> / <code>Loading weights</code> are the <em>embedding and rerank</em> models (Hugging Face), not Ollama.
+    </div>
+
+    <div id="thread" class="thread" aria-live="polite"></div>
+
+    <div class="row" id="controls-row" aria-busy="false">
+      <input id="q" type="text" placeholder="Ask a question…" autocomplete="off" />
+      <label class="muted" for="k">k</label>
+      <input id="k" type="number" min="1" max="20" value="5" />
+      <label class="muted"><input id="use_llm" type="checkbox" checked /> use Ollama LLM</label>
+      <button id="ask" type="button">Ask</button>
+      <button id="newchat" type="button">New chat</button>
+      <button id="rebuild" type="button">Rebuild Index</button>
+      <button id="ollamaBench" type="button">Ollama speed</button>
+    </div>
+
+    <div class="status-row muted">
+      <span id="busy" class="spinner" aria-hidden="true"></span>
+      <span id="status" role="status"></span>
+    </div>
+    <div id="answer" class="box" style="display:none"></div>
+    <div id="chunks" class="box" style="display:none"></div>
+
+    <script>
+(function () {
+  'use strict';
+
+  var SESSION_KEY = 'dama_session_id';
+
+  function $(id) {
+    return document.getElementById(id);
+  }
+
+  function setBusy(on, mode) {
+    var spinner = $('busy');
+    var row = $('controls-row');
+    var ids = mode === 'all'
+      ? ['ask', 'newchat', 'rebuild', 'ollamaBench']
+      : ['ask'];
+    if (spinner) spinner.classList.toggle('visible', on);
+    if (row) row.setAttribute('aria-busy', on ? 'true' : 'false');
+    for (var i = 0; i < ids.length; i++) {
+      var el = $(ids[i]);
+      if (el) el.disabled = !!on;
+    }
+  }
+
+  function setStatus(s) {
+    var el = $('status');
+    if (el) el.textContent = s;
+  }
+
+  function esc(s) {
+    if (s == null) return '';
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c];
+    });
+  }
+
+  function formatElapsed(ms) {
+    if (ms == null || isNaN(ms)) return '';
+    var n = Number(ms);
+    return n >= 1000 ? (n / 1000).toFixed(2) + ' s' : Math.round(n) + ' ms';
+  }
+
+  function formatTimingBreakdown(d) {
+    var parts = [];
+    var rw = Number(d.rewrite_ms);
+    if (rw > 0) parts.push('rewrite ' + formatElapsed(rw));
+    parts.push('retrieve ' + formatElapsed(d.retrieval_ms));
+    if (d.used_llm) {
+      var cx = Number(d.context_ms);
+      if (cx > 0) parts.push('extra context ' + formatElapsed(cx));
+      parts.push('LLM generate ' + formatElapsed(d.llm_ms));
+    }
+    return parts.join(' · ');
+  }
+
+  function appendThread(threadEl, role, text, meta) {
+    if (!threadEl) return;
+    var div = document.createElement('div');
+    div.className = 'msg ' + role;
+    var metaHtml = meta ? '<div class="msg-meta">' + esc(meta) + '</div>' : '';
+    div.innerHTML = '<div class="who">' + (role === 'user' ? 'You' : 'Assistant') + '</div><pre>' + esc(text) + '</pre>' + metaHtml;
+    threadEl.appendChild(div);
+    threadEl.scrollTop = threadEl.scrollHeight;
+  }
+
+  function ensureSession() {
+    var sid = localStorage.getItem(SESSION_KEY);
+    if (sid) return Promise.resolve(sid);
+    return fetch('/api/sessions', { method: 'POST' }).then(function (res) {
+      if (!res.ok) return res.text().then(function (t) { throw new Error(t || 'Failed to create session'); });
+      return res.json();
+    }).then(function (data) {
+      sid = data.session_id;
+      localStorage.setItem(SESSION_KEY, sid);
+      return sid;
+    });
+  }
+
+  function init() {
+    var answerEl = $('answer');
+    var chunksEl = $('chunks');
+    var threadEl = $('thread');
+    var qInput = $('q');
+    var kInput = $('k');
+    var useLlmEl = $('use_llm');
+
+    function newChat() {
+      if (!threadEl || !answerEl || !chunksEl) return;
+      threadEl.innerHTML = '';
+      answerEl.style.display = 'none';
+      chunksEl.style.display = 'none';
+      setBusy(true, 'all');
+      setStatus('Starting new chat…');
+      fetch('/api/sessions', { method: 'POST' })
+        .then(function (res) {
+          if (!res.ok) return res.text().then(function (t) { throw new Error(t); });
+          return res.json();
+        })
+        .then(function (data) {
+          localStorage.setItem(SESSION_KEY, data.session_id);
+          setStatus('New chat ready.');
+        })
+        .catch(function (e) {
+          setStatus('Error: ' + (e && e.message ? e.message : String(e)));
+        })
+        .finally(function () {
+          setBusy(false, 'all');
+        });
+    }
+
+    function ask() {
+      if (!qInput || !kInput || !useLlmEl || !answerEl || !chunksEl || !threadEl) {
+        setStatus('UI error: missing controls.');
+        return;
+      }
+      var question = (qInput.value || '').trim();
+      var k = parseInt(kInput.value || '5', 10);
+      var use_llm = !!useLlmEl.checked;
+      if (!question) return;
+
+      answerEl.style.display = 'none';
+      chunksEl.style.display = 'none';
+      setBusy(true, 'query');
+      setStatus('Asking…');
+
+      function formatHttpError(res, textBody) {
+        var msg = textBody || ('HTTP ' + res.status);
+        try {
+          var j = JSON.parse(textBody);
+          if (j && j.detail != null) {
+            msg = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail);
+          }
+        } catch (e0) { /* not JSON */ }
+        if (res.status === 502) {
+          msg += ' — Start Ollama (ollama serve), ensure the model is installed, and that OLLAMA_MODEL matches.';
+        }
+        return msg;
+      }
+
+      ensureSession()
+        .then(function (session_id) {
+          return fetch('/api/query', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ question: question, k: k, use_llm: use_llm, session_id: session_id })
+          });
+        })
+        .then(function (res) {
+          if (!res.ok) {
+            return res.text().then(function (t) {
+              throw new Error(formatHttpError(res, t));
+            });
+          }
+          return res.json();
+        })
+        .then(function (data) {
+          var took = formatElapsed(data.elapsed_ms);
+          var breakdown = formatTimingBreakdown(data);
+          var detailLine = took ? ('Total: ' + took + (breakdown ? ' — ' + breakdown + '.' : '.')) : '';
+          var doneMsg = data.used_llm
+            ? 'Done (LLM answer generated).'
+            : 'Done (retrieval only — no Ollama call; check "use Ollama LLM" for a written answer).';
+          setStatus(doneMsg + (detailLine ? ' ' + detailLine : ''));
+
+          qInput.value = '';
+          appendThread(threadEl, 'user', question, '');
+          var ans = data.answer || (data.used_llm ? '(no answer)' : '(retrieval only — see chunks below)');
+          var metaLines = [];
+          if (took) metaLines.push('Total server time: ' + took);
+          if (breakdown) metaLines.push(breakdown);
+          appendThread(threadEl, 'assistant', ans, metaLines.length ? metaLines.join('\n') : '');
+
+          answerEl.innerHTML =
+            '<h3>Latest answer' +
+            (took ? ' <span class="muted">(' + esc(took) + ')</span>' : '') +
+            '</h3>' +
+            (breakdown ? '<p class="msg-meta">' + esc(breakdown) + '</p>' : '') +
+            '<pre>' + esc(ans) + '</pre>';
+          answerEl.style.display = 'block';
+
+          var html = '<h3>Top matching chunks</h3>';
+          var ch = data.chunks || [];
+          for (var i = 0; i < ch.length; i++) {
+            var c = ch[i];
+            html += '<div class="chunk">';
+            html += '<div class="src"><b>source</b>: ' + esc(c.source) + (c.distance != null ? (' &nbsp; <b>distance</b>: ' + esc(c.distance)) : '') + '</div>';
+            html += '<pre>' + esc(c.text) + '</pre>';
+            html += '</div>';
+          }
+          chunksEl.innerHTML = html;
+          chunksEl.style.display = 'block';
+        })
+        .catch(function (e) {
+          setStatus('Error: ' + (e && e.message ? e.message : String(e)));
+        })
+        .finally(function () {
+          setBusy(false, 'query');
+        });
+    }
+
+    function rebuild() {
+      if (!answerEl || !chunksEl) return;
+      answerEl.style.display = 'none';
+      chunksEl.style.display = 'none';
+      setBusy(true, 'all');
+      setStatus('Rebuilding index… (this can take a bit)');
+      fetch('/api/build', { method: 'POST' })
+        .then(function (res) {
+          return res.json().then(function (data) {
+            if (!res.ok) throw new Error((data && data.detail) ? String(data.detail) : JSON.stringify(data));
+            return data;
+          });
+        })
+        .then(function (data) {
+          setStatus('Index rebuilt. collection_count=' + data.collection_count);
+        })
+        .catch(function (e) {
+          setStatus('Rebuild error: ' + (e && e.message ? e.message : String(e)));
+        })
+        .finally(function () {
+          setBusy(false, 'all');
+        });
+    }
+
+    function benchOllama() {
+      setBusy(true, 'all');
+      setStatus('Measuring Ollama (one short reply)…');
+      fetch('/api/ollama-bench')
+        .then(function (res) {
+          return res.json().then(function (data) {
+            return { ok: res.ok, data: data, status: res.status };
+          });
+        })
+        .then(function (r) {
+          if (!r.ok) {
+            var d = r.data && r.data.detail;
+            setStatus('Ollama speed failed: ' + (typeof d === 'string' ? d : String(r.status)));
+            return;
+          }
+          var ms = r.data.ollama_ms;
+          var model = r.data.model || '';
+          setStatus('Ollama round-trip: ' + formatElapsed(ms) + (model ? ' — model ' + model : ''));
+        })
+        .catch(function (e) {
+          setStatus('Ollama speed error: ' + (e && e.message ? e.message : String(e)));
+        })
+        .finally(function () {
+          setBusy(false, 'all');
+        });
+    }
+
+    var askBtn = $('ask');
+    var newBtn = $('newchat');
+    var rebuildBtn = $('rebuild');
+    var benchBtn = $('ollamaBench');
+
+    if (askBtn) askBtn.addEventListener('click', ask);
+    if (newBtn) newBtn.addEventListener('click', newChat);
+    if (rebuildBtn) rebuildBtn.addEventListener('click', rebuild);
+    if (benchBtn) benchBtn.addEventListener('click', benchOllama);
+    if (qInput) {
+      qInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') ask();
+      });
+    }
+
+    ensureSession()
+      .then(function () { setStatus('Ready.'); })
+      .catch(function (e) {
+        setStatus('Session error: ' + (e && e.message ? e.message : String(e)));
+      });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+    </script>
+  </body>
+</html>

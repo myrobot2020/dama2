@@ -82,3 +82,12 @@ python -m uvicorn local_app:app --host 127.0.0.1 --port 8000
 
 Lecture transcripts are auto-generated from this YouTube playlist:
 [Anguttara Nikaya by Bhante Hye Dhammavuddho Mahathera](https://www.youtube.com/playlist?list=PLD8I9vPmsYXxR_Qt36EbquMkYTOZbXWpM)
+
+## Changelog
+
+### `fastlama` branch
+
+- **Web UI** lives in `static/index.html`; `local_app.py` serves it via `HTMLResponse` (UTF-8). Easier to edit than an inlined HTML string.
+- **Ollama speed**: toolbar button plus `GET /api/ollama-bench` — one minimal Ollama chat to measure round-trip latency on `localhost:11434`.
+- **UX**: busy spinner and disabled buttons during Ask / New chat / Rebuild / Ollama bench; on-page notes explaining Ollama vs Hugging Face (embedding/rerank) log noise; clearer status when running retrieval-only vs LLM; JSON error `detail` surfaced when the API returns errors (e.g. 502 if Ollama is down).
+- **Cleanup**: removed temporary debug logging hooks that posted to a local ingest URL or wrote extra log files.
