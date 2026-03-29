@@ -1,6 +1,6 @@
-# Cursor Agent transcripts (DB + ~/.cursor/.../agent-transcripts) -> cursor chats/
-# -> SFT JSONL -> optional LoRA (requirements-finetune.txt).
-# Training runs only if CURSOR_OLLAMA_PIPELINE=1 or -Train.
+# Cursor Agent transcripts -> cursor chats/ -> train.jsonl -> Ollama Modelfile + `ollama create`.
+# No PyTorch/PEFT in this script; optional GGUF adapter via OLLAMA_ADAPTER_GGUF.
+# "Train" step runs only if CURSOR_OLLAMA_PIPELINE=1 or -Train (calls ollama create).
 param(
     [switch]$Train,
     [double]$MaxFileAgeHours = 0,
@@ -26,10 +26,10 @@ if ($MaxFileAgeHours -gt 0) {
 }
 python ft/prepare_dataset.py @prepareArgs
 
-$enableTrain = $Train -or ($env:CURSOR_OLLAMA_PIPELINE -eq "1")
-if (-not $enableTrain) {
-    Write-Host "LoRA train skipped. Set CURSOR_OLLAMA_PIPELINE=1 or pass -Train."
+$enableOllama = $Train -or ($env:CURSOR_OLLAMA_PIPELINE -eq "1")
+if (-not $enableOllama) {
+    Write-Host "Ollama create skipped. Set CURSOR_OLLAMA_PIPELINE=1 or pass -Train."
     exit 0
 }
 
-python ft/train_sft.py @args
+python ft/build_ollama_modelfile.py --create @args
