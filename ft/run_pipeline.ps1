@@ -1,6 +1,7 @@
 # Cursor Agent transcripts -> cursor chats/ -> train.jsonl -> Ollama Modelfile + `ollama create`.
-# No PyTorch/PEFT in this script; optional GGUF adapter via OLLAMA_ADAPTER_GGUF.
-# "Train" step runs only if CURSOR_OLLAMA_PIPELINE=1 or -Train (calls ollama create).
+# No PyTorch in this script. Default: SYSTEM-only (no weight change). Set OLLAMA_ADAPTER_GGUF
+# for partial weight adjustment (GGUF adapter on top of FROM).
+# Ollama step runs only if CURSOR_OLLAMA_PIPELINE=1 or -Train.
 param(
     [switch]$Train,
     [double]$MaxFileAgeHours = 0,

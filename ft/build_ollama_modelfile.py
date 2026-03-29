@@ -1,12 +1,18 @@
 """Build an Ollama Modelfile from ft/data/train.jsonl and optionally `ollama create`.
 
-This is Ollama-only (no PyTorch): it sets FROM + SYSTEM from your Cursor-derived
-training JSONL so the local model picks up style/context hints. For real weight
-changes, merge a LoRA to GGUF elsewhere and set OLLAMA_ADAPTER_GGUF.
+Weight behavior (be precise):
+  • SYSTEM-only (default): **no** weight updates — same base weights as `FROM`;
+    only extra context / instructions at inference (not partial fine-tuning).
+  • `OLLAMA_ADAPTER_GGUF` set: **partial** weight adjustment — Ollama applies a
+    GGUF adapter (typically LoRA-class deltas) on top of `FROM`; base weights
+    stay frozen aside from that low-rank overlay.
+
+Train Cursor chats → JSONL here does **not** by itself produce that GGUF; you
+merge/export a LoRA (or train an adapter) elsewhere, then point the env at the file.
 
 Env:
   OLLAMA_MODEL          Base image for FROM (default: mistral:instruct)
-  OLLAMA_ADAPTER_GGUF   Optional path to GGUF adapter for ADAPTER line
+  OLLAMA_ADAPTER_GGUF   Optional path to GGUF adapter (partial weight adjustment)
   DAMA_OLLAMA_NAME      Name for `ollama create` (default: dama2-cursor)
 """
 from __future__ import annotations
@@ -106,6 +112,16 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(text, encoding="utf-8")
     print(f"Wrote {out} (FROM {base}" + (f", ADAPTER {adapter}" if adapter else "") + ")")
+    if adapter:
+        print(
+            "Weights: partial adjustment via ADAPTER (GGUF low-rank overlay on base).",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "Weights: unchanged — SYSTEM only adds context; no partial fine-tuning.",
+            file=sys.stderr,
+        )
 
     if args.create:
         try:
