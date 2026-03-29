@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import time
 from pathlib import Path
 
 
@@ -113,6 +114,13 @@ def main() -> None:
     p.add_argument("--no-strip-attachments", action="store_true")
     p.add_argument("--min-user-chars", type=int, default=3)
     p.add_argument("--min-assistant-chars", type=int, default=20)
+    p.add_argument(
+        "--max-file-age-hours",
+        type=float,
+        default=None,
+        metavar="H",
+        help="Only include *.jsonl modified within the last H hours.",
+    )
     args = p.parse_args()
 
     ft_dir = Path(__file__).resolve().parent
@@ -125,6 +133,13 @@ def main() -> None:
         raise SystemExit(f"Input dir not found: {input_dir}")
     output.parent.mkdir(parents=True, exist_ok=True)
     files = sorted(input_dir.glob("*.jsonl"))
+    if args.max_file_age_hours is not None and args.max_file_age_hours > 0:
+        cutoff = time.time() - args.max_file_age_hours * 3600.0
+        files = [f for f in files if f.stat().st_mtime >= cutoff]
+        if not files:
+            raise SystemExit(
+                f"No .jsonl in {input_dir} modified within {args.max_file_age_hours}h"
+            )
     if not files:
         raise SystemExit(f"No .jsonl in {input_dir}")
 
