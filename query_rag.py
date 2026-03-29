@@ -25,14 +25,23 @@ def get_collection():
     return client.get_collection(COLLECTION_NAME)
 
 
-def retrieve(context_embed_model: SentenceTransformer, collection, query: str, k: int = 5) -> List[str]:
+def retrieve(
+    context_embed_model: SentenceTransformer,
+    collection,
+    query: str,
+    k: int = 5,
+    an_book: Optional[int] = None,
+) -> List[str]:
     q_emb = context_embed_model.encode([query])[0].tolist()
     n_candidates = min(max(k * 10, 50), 200)
-    results = collection.query(
-        query_embeddings=[q_emb],
-        n_results=n_candidates,
-        include=["documents", "metadatas", "distances"],
-    )
+    q_kw: Dict = {
+        "query_embeddings": [q_emb],
+        "n_results": n_candidates,
+        "include": ["documents", "metadatas", "distances"],
+    }
+    if an_book is not None:
+        q_kw["where"] = {"an_book": an_book}
+    results = collection.query(**q_kw)
     docs = results.get("documents", [[]])[0]
     metas = results.get("metadatas", [[]])[0]
     dists = results.get("distances", [[]])[0]
@@ -85,11 +94,14 @@ def retrieve(context_embed_model: SentenceTransformer, collection, query: str, k
     seen_keys = set((src, str(doc)[:200]) for (src, _, doc) in packed)
     for t in terms[:6]:
         try:
-            got = collection.get(
-                where_document={"$contains": t},
-                include=["documents", "metadatas"],
-                limit=min(200, max(50, k * 20)),
-            )
+            g_kw: Dict = {
+                "where_document": {"$contains": t},
+                "include": ["documents", "metadatas"],
+                "limit": min(200, max(50, k * 20)),
+            }
+            if an_book is not None:
+                g_kw["where"] = {"an_book": an_book}
+            got = collection.get(**g_kw)
         except Exception:
             continue
         k_docs = (got or {}).get("documents", []) or []
@@ -297,6 +309,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Query the Dhamma transcript RAG index.")
     parser.add_argument("--question", "-q", type=str, default="", help="Ask a single question and exit.")
     parser.add_argument("--k", type=int, default=5, help="Number of chunks to retrieve.")
+    parser.add_argument(
+        "--an-book",
+        type=int,
+        default=None,
+        help="Restrict retrieval to chunks with this Anguttara book number (metadata).",
+    )
     parser.add_argument("--no-llm", action="store_true", help="Only retrieve chunks; do not call the LLM.")
     return parser.parse_args()
 
@@ -315,7 +333,9 @@ def main() -> None:
 
     def run_once(q: str, retrieval_query: str, hist: Optional[List[Dict[str, str]]]) -> Optional[str]:
         try:
-            chunks = retrieve(embed_model, collection, retrieval_query, k=args.k)
+            chunks = retrieve(
+                embed_model, collection, retrieval_query, k=args.k, an_book=args.an_book
+            )
         except Exception as e:
             print(f"\nError while retrieving from the index: {e}")
             return None

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import List
@@ -11,11 +12,13 @@ from transcript_pipeline.registry import get_transform
 
 import transcript_pipeline.transforms  # noqa: F401 — register built-in transforms
 
-# region agent log
+# region agent log (set DAMA_PIPELINE_DEBUG=1 to append JSON lines)
 _DEBUG_LOG = Path(__file__).resolve().parent.parent / "debug-37c3af.log"
 
 
 def _agent_dbg(message: str, data: dict, hypothesis_id: str) -> None:
+    if not os.environ.get("DAMA_PIPELINE_DEBUG", "").strip():
+        return
     payload = {
         "sessionId": "37c3af",
         "timestamp": int(time.time() * 1000),

@@ -54,6 +54,8 @@
       <input id="q" type="text" placeholder="Ask a question…" autocomplete="off" />
       <label class="muted" for="k">k</label>
       <input id="k" type="number" min="1" max="20" value="5" />
+      <label class="muted" for="an_book">AN book</label>
+      <input id="an_book" type="number" min="1" max="99" value="" placeholder="any" title="Leave empty for all books; e.g. 1 for Book of Ones talks" style="width:70px" />
       <label class="muted"><input id="use_llm" type="checkbox" checked /> use Ollama LLM</label>
       <button id="ask" type="button">Ask</button>
       <button id="newchat" type="button">New chat</button>
@@ -183,6 +185,7 @@
     var threadEl = $('thread');
     var qInput = $('q');
     var kInput = $('k');
+    var anBookEl = $('an_book');
     var useLlmEl = $('use_llm');
 
     function newChat() {
@@ -240,10 +243,15 @@
 
       ensureSession()
         .then(function (session_id) {
+          var payload = { question: question, k: k, use_llm: use_llm, session_id: session_id };
+          if (anBookEl && anBookEl.value !== '') {
+            var ab = parseInt(anBookEl.value, 10);
+            if (!isNaN(ab) && ab >= 1) payload.an_book = ab;
+          }
           return fetch('/api/query', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ question: question, k: k, use_llm: use_llm, session_id: session_id })
+            body: JSON.stringify(payload)
           });
         })
         .then(function (res) {
@@ -284,7 +292,11 @@
           for (var i = 0; i < ch.length; i++) {
             var c = ch[i];
             html += '<div class="chunk">';
-            html += '<div class="src"><b>source</b>: ' + esc(c.source) + (c.distance != null ? (' &nbsp; <b>distance</b>: ' + esc(c.distance)) : '') + '</div>';
+            html += '<div class="src"><b>source</b>: ' + esc(c.source)
+              + (c.an_book != null && c.an_book > 0 ? (' &nbsp; <b>an_book</b>: ' + esc(c.an_book)) : '')
+              + (c.an_sutta_ref ? (' &nbsp; <b>sutta</b>: ' + esc(c.an_sutta_ref)) : '')
+              + (c.distance != null ? (' &nbsp; <b>distance</b>: ' + esc(c.distance)) : '')
+              + '</div>';
             html += '<pre>' + esc(c.text) + '</pre>';
             html += '</div>';
           }

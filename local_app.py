@@ -51,6 +51,11 @@ class QueryRequest(BaseModel):
     k: int = Field(default=5, ge=1, le=20)
     use_llm: bool = Field(default=True)
     session_id: Optional[str] = Field(default=None)
+    an_book: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="If set, restrict retrieval to chunks whose filename metadata matches this AN book number.",
+    )
 
 
 class SessionCreateResponse(BaseModel):
@@ -70,6 +75,10 @@ class Chunk(BaseModel):
     source: str = ""
     distance: Optional[float] = None
     text: str
+    an_book: int = 0
+    lecture_ord: int = 0
+    an_sutta_ref: str = ""
+    sutta_chunk_part: int = 0
 
 
 class QueryResponse(BaseModel):
@@ -129,6 +138,38 @@ def _tokenize_query(q: str) -> List[str]:
     return tokens[:12]
 
 
+def _chunk_from_doc_meta(doc: Any, meta: Any, dist: Optional[float]) -> Chunk:
+    src = ""
+    ab = 0
+    lo = 0
+    ref = ""
+    scp = 0
+    if isinstance(meta, dict):
+        src = str(meta.get("source") or "")
+        try:
+            ab = int(meta.get("an_book") or 0)
+        except (TypeError, ValueError):
+            ab = 0
+        try:
+            lo = int(meta.get("lecture_ord") or 0)
+        except (TypeError, ValueError):
+            lo = 0
+        ref = str(meta.get("an_sutta_ref") or "")
+        try:
+            scp = int(meta.get("sutta_chunk_part") or 0)
+        except (TypeError, ValueError):
+            scp = 0
+    return Chunk(
+        source=src,
+        distance=float(dist) if dist is not None else None,
+        text=str(doc),
+        an_book=ab,
+        lecture_ord=lo,
+        an_sutta_ref=ref,
+        sutta_chunk_part=scp,
+    )
+
+
 def _lexical_score(query: str, chunk_text: str) -> int:
     q = (query or "").strip().lower()
     if not q or not chunk_text:
@@ -149,26 +190,32 @@ def _lexical_score(query: str, chunk_text: str) -> int:
     return score
 
 
-def _retrieve(embed_model: SentenceTransformer, collection: Any, query: str, k: int) -> List[Chunk]:
+def _retrieve(
+    embed_model: SentenceTransformer,
+    collection: Any,
+    query: str,
+    k: int,
+    an_book: Optional[int] = None,
+) -> List[Chunk]:
     q_emb = embed_model.encode([query])[0].tolist()
     # Pull extra candidates, then rerank. Embedding-only search often misses
     # exact keyword/phrase matches for short queries.
     n_candidates = min(max(k * 10, 50), 200)
-    results: Dict[str, Any] = collection.query(
-        query_embeddings=[q_emb],
-        n_results=n_candidates,
-        include=["documents", "metadatas", "distances"],
-    )
+    q_kw: Dict[str, Any] = {
+        "query_embeddings": [q_emb],
+        "n_results": n_candidates,
+        "include": ["documents", "metadatas", "distances"],
+    }
+    if an_book is not None:
+        q_kw["where"] = {"an_book": an_book}
+    results: Dict[str, Any] = collection.query(**q_kw)
     docs = results.get("documents", [[]])[0]
     metas = results.get("metadatas", [[]])[0]
     dists = results.get("distances", [[]])[0]
 
     out: List[Chunk] = []
     for doc, meta, dist in zip(docs, metas, dists):
-        src = ""
-        if isinstance(meta, dict):
-            src = str(meta.get("source") or "")
-        out.append(Chunk(source=src, distance=float(dist) if dist is not None else None, text=str(doc)))
+        out.append(_chunk_from_doc_meta(doc, meta, float(dist) if dist is not None else None))
 
     # Keyword fallback: also pull chunks that literally contain query terms.
     # This is critical for short keyword searches like "thai forest".
@@ -185,28 +232,27 @@ def _retrieve(embed_model: SentenceTransformer, collection: Any, query: str, k: 
 
     for t in terms[:6]:
         try:
-            # Chroma supports document substring filtering with where_document.
-            # We use `get()` so we don't need another embedding query.
-            got = collection.get(
-                where_document={"$contains": t},
-                include=["documents", "metadatas"],
-                limit=min(200, max(50, k * 20)),
-            )
+            g_kw: Dict[str, Any] = {
+                "where_document": {"$contains": t},
+                "include": ["documents", "metadatas"],
+                "limit": min(200, max(50, k * 20)),
+            }
+            if an_book is not None:
+                g_kw["where"] = {"an_book": an_book}
+            got = collection.get(**g_kw)
         except Exception:
             continue
 
         k_docs = (got or {}).get("documents", []) or []
         k_metas = (got or {}).get("metadatas", []) or []
         for doc, meta in zip(k_docs, k_metas):
-            src = ""
-            if isinstance(meta, dict):
-                src = str(meta.get("source") or "")
             text = str(doc)
-            key = (src, text[:200])
+            ch = _chunk_from_doc_meta(doc, meta, None)
+            key = (ch.source, text[:200])
             if key in seen_keys:
                 continue
             seen_keys.add(key)
-            out.append(Chunk(source=src, distance=None, text=text))
+            out.append(ch)
 
     # Stage 1: lexical + embedding score to get top candidates
     out.sort(
@@ -532,8 +578,8 @@ def home() -> HTMLResponse:
 def build_index() -> BuildResponse:
     with _lock:
         try:
-            # Rebuild the persistent collection on disk.
-            build_index_module.main()
+            # Rebuild the persistent collection on disk (full corpus; use CLI for --only-prefix).
+            build_index_module.run_build()
             col = _get_collection()
             return BuildResponse(ok=True, collection_count=int(col.count()))
         except Exception as e:
@@ -641,7 +687,7 @@ def query(req: QueryRequest) -> QueryResponse:
 
         embed_model = _get_embed_model()
         _t_r0 = time.perf_counter()
-        chunks = _retrieve(embed_model, col, retrieval_q, req.k)
+        chunks = _retrieve(embed_model, col, retrieval_q, req.k, an_book=req.an_book)
         _retrieve_total_ms = (time.perf_counter() - _t_r0) * 1000
 
         used_llm = False
@@ -657,18 +703,23 @@ def query(req: QueryRequest) -> QueryResponse:
             if primary_src:
                 try:
                     _t_ex = time.perf_counter()
+                    if req.an_book is not None:
+                        exp_where: Dict[str, Any] = {
+                            "$and": [{"source": primary_src}, {"an_book": req.an_book}]
+                        }
+                    else:
+                        exp_where = {"source": primary_src}
                     got = col.get(
-                        where={"source": primary_src},
+                        where=exp_where,
                         include=["documents", "metadatas"],
                         limit=50,
                     )
                     for doc, meta in zip(got.get("documents", []), got.get("metadatas", [])):
-                        src = str(meta.get("source", "")) if isinstance(meta, dict) else ""
-                        text = str(doc)
-                        key = (src, text[:200])
+                        ch = _chunk_from_doc_meta(doc, meta, None)
+                        key = (ch.source, ch.text[:200])
                         if key not in seen:
                             seen.add(key)
-                            llm_chunks.append(Chunk(source=src, text=text))
+                            llm_chunks.append(ch)
                     _expand_ms = (time.perf_counter() - _t_ex) * 1000
                 except Exception:
                     pass

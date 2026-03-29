@@ -4,6 +4,7 @@ Run self-made eval questions from eval_results.txt against the local API.
 Usage (server on 127.0.0.1:8000):
   python run_eval.py
   set USE_LLM=1 && python run_eval.py   # include Ollama synthesis (slower)
+  set EVAL_AN_BOOK=1 && python run_eval.py   # pass an_book filter to /api/query
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import requests
 BASE = os.environ.get("EVAL_BASE", "http://127.0.0.1:8000").rstrip("/")
 USE_LLM = os.environ.get("USE_LLM", "").lower() in ("1", "true", "yes")
 K = int(os.environ.get("EVAL_K", "5"))
+EVAL_AN_BOOK_RAW = os.environ.get("EVAL_AN_BOOK", "").strip()
 
 
 def load_questions(eval_path: Path) -> list[str]:
@@ -57,13 +59,22 @@ def main() -> int:
         print("No ===Qn=== questions found in eval_results.txt", file=sys.stderr)
         return 1
 
-    print(f"Base URL: {BASE}  use_llm={USE_LLM}  k={K}")
+    eval_an_book: int | None = None
+    if EVAL_AN_BOOK_RAW:
+        try:
+            eval_an_book = int(EVAL_AN_BOOK_RAW)
+        except ValueError:
+            eval_an_book = None
+    print(f"Base URL: {BASE}  use_llm={USE_LLM}  k={K}  an_book={eval_an_book}")
     fails = 0
 
     for i, q in enumerate(questions):
+        payload: dict = {"question": q, "k": K, "use_llm": USE_LLM}
+        if eval_an_book is not None and eval_an_book >= 1:
+            payload["an_book"] = eval_an_book
         r = requests.post(
             f"{BASE}/api/query",
-            json={"question": q, "k": K, "use_llm": USE_LLM},
+            json=payload,
             timeout=600 if USE_LLM else 120,
         )
         tag = f"Q{i + 1}"
