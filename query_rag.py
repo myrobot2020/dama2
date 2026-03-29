@@ -1,6 +1,7 @@
 import argparse
+import os
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Optional
 
 import re
 import requests
@@ -13,7 +14,7 @@ BASE_DIR = Path(__file__).resolve().parent
 PERSIST_DIR = BASE_DIR / "rag_index"
 COLLECTION_NAME = "dama_transcripts"
 OLLAMA_BASE_URL = "http://localhost:11434"
-OLLAMA_MODEL = "mistral:instruct"
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:0.5b-instruct")
 
 
 def get_collection():
@@ -108,6 +109,29 @@ def retrieve(context_embed_model: SentenceTransformer, collection, query: str, k
     return [f"[source={src} distance={dist}]\n{doc}" for (src, dist, doc) in packed]
 
 
+def _sanitize_history_for_llm(
+    history: List[Dict[str, str]], max_messages: int = 12, max_chars: int = 3200
+) -> List[Dict[str, str]]:
+    out: List[Dict[str, str]] = []
+    for m in history[-max_messages:]:
+        r = str(m.get("role", "")).strip()
+        c = (m.get("content") or "").strip()
+        if r not in ("user", "assistant") or not c:
+            continue
+        if len(c) > max_chars:
+            c = c[: max_chars - 3] + "..."
+        out.append({"role": r, "content": c})
+    return out
+
+
+def _history_conversation_block(history: List[Dict[str, str]]) -> str:
+    lines: List[str] = []
+    for m in _sanitize_history_for_llm(history):
+        label = "User" if m["role"] == "user" else "Assistant"
+        lines.append(f"{label}: {m['content']}")
+    return "\n\n".join(lines)
+
+
 def _ollama_chat(messages: list, temperature: float = 0, num_ctx: int = 8192, timeout: int = 300) -> str:
     resp = requests.post(
         f"{OLLAMA_BASE_URL}/api/chat",
@@ -119,23 +143,71 @@ def _ollama_chat(messages: list, temperature: float = 0, num_ctx: int = 8192, ti
     return resp.json().get("message", {}).get("content", "")
 
 
-def call_llm(query: str, chunks: List[str]) -> str:
+def _rewrite_query_for_search(history: List[Dict[str, str]], new_question: str) -> str:
+    lines: List[str] = []
+    for m in history[-10:]:
+        role = m.get("role", "")
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        label = "User" if role == "user" else "Assistant"
+        lines.append(f"{label}: {content}")
+    transcript = "\n".join(lines)
+    if len(transcript) > 1500:
+        transcript = transcript[-1500:]
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You rewrite follow-up messages into one standalone search query for a Buddhist "
+                "transcript library. Resolve pronouns and implicit references using the conversation. "
+                "Output ONLY the search query text — no quotes, labels, or explanation."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Recent conversation:\n{transcript}\n\nNew user message: {new_question}\n\n"
+                f"Standalone search query:"
+            ),
+        },
+    ]
+    try:
+        raw = _ollama_chat(messages, temperature=0, num_ctx=2048, timeout=120)
+    except Exception:
+        return new_question
+    q = (raw or "").strip().strip('"').strip("'").split("\n")[0].strip()
+    return q if len(q) >= 3 else new_question
+
+
+def call_llm(
+    query: str, chunks: List[str], chat_history: Optional[List[Dict[str, str]]] = None
+) -> str:
+    hist = _sanitize_history_for_llm(chat_history) if chat_history else []
+    convo_block = _history_conversation_block(chat_history) if chat_history else ""
+    num_ctx = 8192 if hist else 4096
+
+    sys_rules = (
+        "You answer questions ONLY from the provided transcript excerpts.\n\n"
+        "STRICT RULES — violating any of these is a failure:\n"
+        "- You have NO prior knowledge. The excerpts below are the ONLY facts that exist.\n"
+        "- NEVER state anything not written in the excerpts — not even if you \"know\" it is true.\n"
+        "- For every claim you make, quote the specific words from the excerpt that support it.\n"
+        "- If the excerpts do not contain the answer, you MUST say: "
+        "\"The provided excerpts do not contain information to answer this question.\"\n"
+        "- Do NOT guess, infer, or fill gaps with outside knowledge."
+    )
+    if hist:
+        sys_rules += (
+            "\n- Prior turns help interpret follow-ups; every factual claim must still come from the excerpts."
+        )
+
     if len(chunks) <= 3:
         numbered = "\n\n".join([f"[Excerpt {i+1}]\n{c}" for i, c in enumerate(chunks)])
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You answer questions ONLY from the provided transcript excerpts.\n\n"
-                    "STRICT RULES — violating any of these is a failure:\n"
-                    "- You have NO prior knowledge. The excerpts below are the ONLY facts that exist.\n"
-                    "- NEVER state anything not written in the excerpts — not even if you \"know\" it is true.\n"
-                    "- For every claim you make, quote the specific words from the excerpt that support it.\n"
-                    "- If the excerpts do not contain the answer, you MUST say: "
-                    "\"The provided excerpts do not contain information to answer this question.\"\n"
-                    "- Do NOT guess, infer, or fill gaps with outside knowledge."
-                ),
-            },
+        messages: List[dict] = [{"role": "system", "content": sys_rules}]
+        for m in hist:
+            messages.append({"role": m["role"], "content": m["content"]})
+        messages.append(
             {
                 "role": "user",
                 "content": (
@@ -148,11 +220,16 @@ def call_llm(query: str, chunks: List[str]) -> str:
                     f"4. If no excerpt answers the question, say so — do NOT make anything up."
                 ),
             },
-        ]
-        return _ollama_chat(messages)
+        )
+        return _ollama_chat(messages, num_ctx=num_ctx, timeout=300)
 
-    # Map-Reduce for 4+ chunks
     notes_parts = []
+    prefix = ""
+    if convo_block.strip():
+        prefix = (
+            "Recent conversation (use only to interpret what the question refers to):\n"
+            f"{convo_block}\n\n"
+        )
     for i, chunk in enumerate(chunks, 1):
         messages = [
             {
@@ -167,6 +244,7 @@ def call_llm(query: str, chunks: List[str]) -> str:
             {
                 "role": "user",
                 "content": (
+                    f"{prefix}"
                     f"Question: {query}\n\n"
                     f"[Excerpt {i}]\n{chunk}\n\n"
                     f"Extract relevant facts as bullet points with quotes:"
@@ -181,6 +259,12 @@ def call_llm(query: str, chunks: List[str]) -> str:
         return "The provided excerpts do not contain information to answer this question."
 
     all_notes = "\n\n".join(notes_parts)
+    reduce_prefix = ""
+    if convo_block.strip():
+        reduce_prefix = (
+            "Recent conversation (interpret the question only; facts from notes):\n"
+            f"{convo_block}\n\n"
+        )
     messages = [
         {
             "role": "system",
@@ -198,6 +282,7 @@ def call_llm(query: str, chunks: List[str]) -> str:
         {
             "role": "user",
             "content": (
+                f"{reduce_prefix}"
                 f"Question: {query}\n\n"
                 f"EXTRACTED NOTES FROM TRANSCRIPTS:\n{all_notes}\n\n"
                 f"Combine ALL the notes above into a complete, well-organized answer. "
@@ -205,7 +290,7 @@ def call_llm(query: str, chunks: List[str]) -> str:
             ),
         },
     ]
-    return _ollama_chat(messages)
+    return _ollama_chat(messages, num_ctx=num_ctx, timeout=300)
 
 
 def parse_args() -> argparse.Namespace:
@@ -228,12 +313,12 @@ def main() -> None:
     collection = get_collection()
     embed_model = SentenceTransformer("all-MiniLM-L6-v2")
 
-    def run_once(q: str) -> None:
+    def run_once(q: str, retrieval_query: str, hist: Optional[List[Dict[str, str]]]) -> Optional[str]:
         try:
-            chunks = retrieve(embed_model, collection, q, k=args.k)
+            chunks = retrieve(embed_model, collection, retrieval_query, k=args.k)
         except Exception as e:
             print(f"\nError while retrieving from the index: {e}")
-            return
+            return None
 
         print("\nTop matching chunks:\n")
         for i, chunk in enumerate(chunks, start=1):
@@ -243,23 +328,34 @@ def main() -> None:
 
         if use_llm:
             try:
-                answer = call_llm(q, chunks)
+                answer = call_llm(q, chunks, chat_history=hist if hist else None)
             except Exception as e:
                 print(f"Error while calling Ollama: {e}")
-                return
+                return None
             print("=== Answer ===")
             print(answer)
+            return answer
+        return ""
 
     if args.question.strip():
-        run_once(args.question.strip())
+        run_once(args.question.strip(), args.question.strip(), None)
         return
 
+    hist: List[Dict[str, str]] = []
     while True:
         query = input("\nEnter your question (or 'quit' to exit): ").strip()
         if not query or query.lower() in {"q", "quit", "exit"}:
             break
 
-        run_once(query)
+        retrieval_q = _rewrite_query_for_search(hist, query) if hist and use_llm else query
+        if hist and use_llm and retrieval_q != query:
+            print(f"(search query: {retrieval_q})")
+
+        ans = run_once(query, retrieval_q, hist if hist else None)
+        if ans is not None and use_llm:
+            hist.append({"role": "user", "content": query})
+            hist.append({"role": "assistant", "content": ans})
+            hist = hist[-24:]
 
 
 if __name__ == "__main__":

@@ -27,7 +27,8 @@ DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "conversations.db"
 COLLECTION_NAME = "dama_transcripts"
 OLLAMA_BASE_URL = "http://localhost:11434"
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "mistral:instruct")
+# Align default with ft/build_ollama_modelfile.py and DAMA_HF_MODEL (Qwen2.5 0.5B).
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:0.5b-instruct")
 
 _STATIC_INDEX = BASE_DIR / "static" / "index.html"
 _index_html_cache: Optional[str] = None
@@ -54,6 +55,15 @@ class QueryRequest(BaseModel):
 
 class SessionCreateResponse(BaseModel):
     session_id: str
+
+
+class ChatMessageItem(BaseModel):
+    role: str
+    content: str
+
+
+class SessionMessagesResponse(BaseModel):
+    messages: List[ChatMessageItem]
 
 
 class Chunk(BaseModel):
@@ -221,6 +231,30 @@ def _retrieve(embed_model: SentenceTransformer, collection: Any, query: str, k: 
     return candidates[:k]
 
 
+def _sanitize_history_for_llm(
+    history: List[Dict[str, str]], max_messages: int = 12, max_chars: int = 3200
+) -> List[Dict[str, str]]:
+    """Trim prior turns for the LLM so follow-ups stay in context without blowing num_ctx."""
+    out: List[Dict[str, str]] = []
+    for m in history[-max_messages:]:
+        r = str(m.get("role", "")).strip()
+        c = (m.get("content") or "").strip()
+        if r not in ("user", "assistant") or not c:
+            continue
+        if len(c) > max_chars:
+            c = c[: max_chars - 3] + "..."
+        out.append({"role": r, "content": c})
+    return out
+
+
+def _history_conversation_block(history: List[Dict[str, str]]) -> str:
+    lines: List[str] = []
+    for m in _sanitize_history_for_llm(history):
+        label = "User" if m["role"] == "user" else "Assistant"
+        lines.append(f"{label}: {m['content']}")
+    return "\n\n".join(lines)
+
+
 def _ollama_chat(messages: list, temperature: float = 0, num_ctx: int = 4096, timeout: int = 600) -> str:
     resp = requests.post(
         f"{OLLAMA_BASE_URL}/api/chat",
@@ -234,8 +268,14 @@ def _ollama_chat(messages: list, temperature: float = 0, num_ctx: int = 4096, ti
     return resp.json().get("message", {}).get("content", "")
 
 
-def _map_extract(query: str, chunk: Chunk, index: int) -> str:
+def _map_extract(query: str, chunk: Chunk, index: int, convo_block: str = "") -> str:
     """Map step: extract relevant facts and quotes from a single chunk."""
+    prefix = ""
+    if convo_block.strip():
+        prefix = (
+            "Recent conversation (use only to interpret what the question refers to):\n"
+            f"{convo_block}\n\n"
+        )
     messages = [
         {
             "role": "system",
@@ -249,6 +289,7 @@ def _map_extract(query: str, chunk: Chunk, index: int) -> str:
         {
             "role": "user",
             "content": (
+                f"{prefix}"
                 f"Question: {query}\n\n"
                 f"[Excerpt {index} | source: {chunk.source}]\n{chunk.text}\n\n"
                 f"Extract relevant facts as bullet points with quotes:"
@@ -258,8 +299,14 @@ def _map_extract(query: str, chunk: Chunk, index: int) -> str:
     return _ollama_chat(messages, num_ctx=4096, timeout=300)
 
 
-def _reduce_synthesize(query: str, extracted_notes: str) -> str:
+def _reduce_synthesize(query: str, extracted_notes: str, convo_block: str = "") -> str:
     """Reduce step: synthesize a complete answer from extracted notes."""
+    prefix = ""
+    if convo_block.strip():
+        prefix = (
+            "Recent conversation (use only to interpret the question; facts must come from the notes):\n"
+            f"{convo_block}\n\n"
+        )
     messages = [
         {
             "role": "system",
@@ -277,6 +324,7 @@ def _reduce_synthesize(query: str, extracted_notes: str) -> str:
         {
             "role": "user",
             "content": (
+                f"{prefix}"
                 f"Question: {query}\n\n"
                 f"EXTRACTED NOTES FROM TRANSCRIPTS:\n{extracted_notes}\n\n"
                 f"Combine ALL the notes above into a complete, well-organized answer. "
@@ -287,26 +335,38 @@ def _reduce_synthesize(query: str, extracted_notes: str) -> str:
     return _ollama_chat(messages, num_ctx=8192, timeout=300)
 
 
-def _call_llm(query: str, chunks: List[Chunk]) -> str:
+def _call_llm(
+    query: str, chunks: List[Chunk], chat_history: Optional[List[Dict[str, str]]] = None
+) -> str:
+    hist = _sanitize_history_for_llm(chat_history) if chat_history else []
+    convo_block = _history_conversation_block(chat_history) if chat_history else ""
+    num_ctx = 8192 if hist else 4096
+
+    sys_rules = (
+        "You answer questions ONLY from the provided transcript excerpts.\n\n"
+        "STRICT RULES:\n"
+        "1. You have NO prior knowledge. The excerpts below are your ONLY source of truth.\n"
+        "2. SKIP any excerpt that is not directly relevant to the question.\n"
+        "3. For every claim, quote the supporting words from the excerpt.\n"
+        "4. Be concise. Do not pad the answer with tangential information.\n"
+        "5. If no excerpt answers the question, say: "
+        "\"The provided excerpts do not contain information to answer this question.\"\n"
+        "6. Do NOT guess, infer, or fill gaps with outside knowledge."
+    )
+    if hist:
+        sys_rules += (
+            "\n\n7. Prior user/assistant turns help interpret follow-ups (pronouns, \"that\", etc.); "
+            "still ground every factual claim in the transcript excerpts in the final user message."
+        )
+
     if len(chunks) <= 10:
         numbered = "\n\n".join(
             [f"[Excerpt {i+1} | source: {c.source}]\n{c.text}" for i, c in enumerate(chunks)]
         )
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You answer questions ONLY from the provided transcript excerpts.\n\n"
-                    "STRICT RULES:\n"
-                    "1. You have NO prior knowledge. The excerpts below are your ONLY source of truth.\n"
-                    "2. SKIP any excerpt that is not directly relevant to the question.\n"
-                    "3. For every claim, quote the supporting words from the excerpt.\n"
-                    "4. Be concise. Do not pad the answer with tangential information.\n"
-                    "5. If no excerpt answers the question, say: "
-                    "\"The provided excerpts do not contain information to answer this question.\"\n"
-                    "6. Do NOT guess, infer, or fill gaps with outside knowledge."
-                ),
-            },
+        messages: List[Dict[str, str]] = [{"role": "system", "content": sys_rules}]
+        for m in hist:
+            messages.append({"role": m["role"], "content": m["content"]})
+        messages.append(
             {
                 "role": "user",
                 "content": (
@@ -316,14 +376,14 @@ def _call_llm(query: str, chunks: List[Chunk]) -> str:
                     f"Ignore excerpts that do not address the question. "
                     f"Quote key passages and combine into a focused answer."
                 ),
-            },
-        ]
-        return _ollama_chat(messages)
+            }
+        )
+        return _ollama_chat(messages, num_ctx=num_ctx, timeout=300)
 
-    # Map-Reduce for 4+ chunks: extract per-chunk, then synthesize.
+    # Map-Reduce for many chunks: extract per-chunk, then synthesize.
     notes_parts = []
     for i, chunk in enumerate(chunks, 1):
-        extracted = _map_extract(query, chunk, i)
+        extracted = _map_extract(query, chunk, i, convo_block)
         if "NOT_RELEVANT" not in extracted.upper():
             notes_parts.append(f"[From excerpt {i} | source: {chunk.source}]\n{extracted}")
 
@@ -331,7 +391,7 @@ def _call_llm(query: str, chunks: List[Chunk]) -> str:
         return "The provided excerpts do not contain information to answer this question."
 
     all_notes = "\n\n".join(notes_parts)
-    return _reduce_synthesize(query, all_notes)
+    return _reduce_synthesize(query, all_notes, convo_block)
 
 
 def _init_db() -> None:
@@ -520,6 +580,23 @@ def create_session_api() -> SessionCreateResponse:
         return SessionCreateResponse(session_id=sid)
 
 
+@app.get("/api/sessions/{session_id}/messages", response_model=SessionMessagesResponse)
+def get_session_messages(session_id: str) -> SessionMessagesResponse:
+    """Return saved chat turns so the web UI can restore the thread after refresh."""
+    ui_message_limit = 500
+    with _lock:
+        with _db_conn() as conn:
+            if not _session_exists(conn, session_id):
+                raise HTTPException(status_code=404, detail="Unknown session_id")
+            rows = conn.execute(
+                "SELECT role, content FROM messages WHERE session_id = ? ORDER BY id ASC LIMIT ?",
+                (session_id, ui_message_limit),
+            ).fetchall()
+    return SessionMessagesResponse(
+        messages=[ChatMessageItem(role=str(r["role"]), content=str(r["content"])) for r in rows]
+    )
+
+
 @app.get("/api/ollama-bench", response_model=OllamaBenchResponse)
 def ollama_bench() -> OllamaBenchResponse:
     """One minimal chat completion to measure local Ollama round-trip latency."""
@@ -562,10 +639,6 @@ def query(req: QueryRequest) -> QueryResponse:
                 retrieval_q = _rewrite_query_for_search(history, req.question)
                 _rewrite_ms = (time.perf_counter() - _trw) * 1000
 
-        llm_question = req.question
-        if history:
-            llm_question = f"User follow-up (may refer to prior discussion): {req.question}"
-
         embed_model = _get_embed_model()
         _t_r0 = time.perf_counter()
         chunks = _retrieve(embed_model, col, retrieval_q, req.k)
@@ -603,7 +676,7 @@ def query(req: QueryRequest) -> QueryResponse:
             llm_chunks = llm_chunks[:8]
             try:
                 _t_llm = time.perf_counter()
-                answer = _call_llm(llm_question, llm_chunks)
+                answer = _call_llm(req.question, llm_chunks, chat_history=history or None)
                 _llm_ms = (time.perf_counter() - _t_llm) * 1000
             except Exception as e:
                 raise HTTPException(status_code=502, detail=f"Ollama LLM call failed: {e}")

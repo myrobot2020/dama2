@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import time
@@ -105,6 +106,21 @@ def jsonl_to_messages(path: Path, strip_attachments: bool) -> list[dict]:
     return out
 
 
+def _dedupe_rows(rows: list[dict]) -> list[dict]:
+    seen: set[str] = set()
+    out: list[dict] = []
+    for row in rows:
+        msgs = row.get("messages") or []
+        key = hashlib.sha256(
+            json.dumps(msgs, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="Build SFT JSONL from Cursor chat exports.")
     p.add_argument("--input-dir", type=Path, default=None)
@@ -120,6 +136,11 @@ def main() -> None:
         default=None,
         metavar="H",
         help="Only include *.jsonl modified within the last H hours.",
+    )
+    p.add_argument(
+        "--no-dedupe",
+        action="store_true",
+        help="Do not drop duplicate conversations (same messages payload across files).",
     )
     args = p.parse_args()
 
@@ -166,7 +187,11 @@ def main() -> None:
         return rows
 
     train_rows = build_rows(train_files)
+    if not args.no_dedupe:
+        train_rows = _dedupe_rows(train_rows)
     val_rows = build_rows(val_files) if val_files else []
+    if val_rows and not args.no_dedupe:
+        val_rows = _dedupe_rows(val_rows)
     if not train_rows:
         raise SystemExit("No training examples after filtering.")
 

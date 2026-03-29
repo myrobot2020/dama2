@@ -1,9 +1,15 @@
-"""LoRA SFT on JSONL from prepare_dataset.py."""
+"""LoRA SFT on JSONL from prepare_dataset.py.
+
+Default HF model matches Ollama FROM when using qwen2.5:0.5b-instruct; override with
+DAMA_HF_MODEL or --model. Keep DAMA_HF_MODEL and OLLAMA_MODEL in sync for ADAPTER."""
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
+
+_DEFAULT_HF_MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
 
 import torch
 from datasets import load_dataset
@@ -24,7 +30,11 @@ def _lora_targets(model_id: str) -> list[str] | None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="Qwen/Qwen2.5-0.5B-Instruct")
+    parser.add_argument(
+        "--model",
+        default=None,
+        help=f"HF model id (default: DAMA_HF_MODEL or {_DEFAULT_HF_MODEL})",
+    )
     parser.add_argument("--train-file", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--epochs", type=float, default=1.0)
@@ -38,18 +48,20 @@ def main() -> None:
     parser.add_argument("--trust-remote-code", action="store_true", default=True)
     args = parser.parse_args()
 
+    model_id = args.model or os.environ.get("DAMA_HF_MODEL", _DEFAULT_HF_MODEL)
+
     ft_dir = Path(__file__).resolve().parent
     train_file = args.train_file or (ft_dir / "data" / "train.jsonl")
     if not train_file.is_file():
         print(f"Missing {train_file}. Run prepare_dataset.py first.", file=sys.stderr)
         sys.exit(1)
 
-    model_stem = args.model.replace("/", "_")
+    model_stem = model_id.replace("/", "_")
     output_dir = args.output_dir or (ft_dir / "runs" / model_stem)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     tokenizer = AutoTokenizer.from_pretrained(
-        args.model, trust_remote_code=args.trust_remote_code
+        model_id, trust_remote_code=args.trust_remote_code
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -77,7 +89,7 @@ def main() -> None:
 
     dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     model = AutoModelForCausalLM.from_pretrained(
-        args.model,
+        model_id,
         trust_remote_code=args.trust_remote_code,
         quantization_config=quant_config,
         device_map="auto" if torch.cuda.is_available() else None,
@@ -92,7 +104,7 @@ def main() -> None:
             lora_dropout=0.05,
             bias="none",
             task_type=TaskType.CAUSAL_LM,
-            target_modules=_lora_targets(args.model),
+            target_modules=_lora_targets(model_id),
         ),
     )
 

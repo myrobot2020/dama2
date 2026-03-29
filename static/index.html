@@ -44,7 +44,7 @@
     <div class="muted">Ask questions against your transcript index. Chats are saved per session. Use &ldquo;Rebuild Index&rdquo; if you add or change transcript files.</div>
     <div class="muted" style="margin-top:10px; font-size:12px; line-height:1.45;">
       <strong>Ollama speed</strong> sends one minimal prompt to your local <a href="https://ollama.com" target="_blank" rel="noopener noreferrer">Ollama</a> API (<code>localhost:11434</code>) and shows how many seconds that took &mdash; useful to see if the LLM is reachable.
-      <strong>Generated answers</strong> need Ollama running, the model pulled (e.g. <code>ollama pull mistral:instruct</code> or set env <code>OLLAMA_MODEL</code>), and <strong>use Ollama LLM</strong> checked.
+      <strong>Generated answers</strong> need Ollama running, the model pulled (e.g. <code>ollama pull qwen2.5:0.5b-instruct</code> or set env <code>OLLAMA_MODEL</code>), and <strong>use Ollama LLM</strong> checked.
       The server log lines about <code>BertModel</code> / <code>Loading weights</code> are the <em>embedding and rerank</em> models (Hugging Face), not Ollama.
     </div>
 
@@ -144,6 +144,37 @@
       localStorage.setItem(SESSION_KEY, sid);
       return sid;
     });
+  }
+
+  /** Reload thread from SQLite after a full page refresh (session id stays in localStorage). */
+  function loadThreadFromServer(threadEl, session_id) {
+    if (!threadEl || !session_id) return Promise.resolve();
+    threadEl.innerHTML = '';
+    return fetch('/api/sessions/' + encodeURIComponent(session_id) + '/messages')
+      .then(function (res) {
+        if (res.status === 404) {
+          localStorage.removeItem(SESSION_KEY);
+          return fetch('/api/sessions', { method: 'POST' }).then(function (r) {
+            if (!r.ok) return r.text().then(function (t) { throw new Error(t || 'Failed to create session'); });
+            return r.json();
+          }).then(function (data) {
+            localStorage.setItem(SESSION_KEY, data.session_id);
+            return null;
+          });
+        }
+        if (!res.ok) return res.text().then(function (t) { throw new Error(t || 'Failed to load messages'); });
+        return res.json();
+      })
+      .then(function (data) {
+        if (!data || !data.messages) return;
+        var msgs = data.messages;
+        for (var i = 0; i < msgs.length; i++) {
+          var m = msgs[i];
+          if (m.role === 'user' || m.role === 'assistant') {
+            appendThread(threadEl, m.role, m.content, '');
+          }
+        }
+      });
   }
 
   function init() {
@@ -335,7 +366,11 @@
     }
 
     ensureSession()
-      .then(function () { setStatus('Ready.'); })
+      .then(function (sid) {
+        return loadThreadFromServer(threadEl, sid).then(function () {
+          setStatus('Ready.');
+        });
+      })
       .catch(function (e) {
         setStatus('Session error: ' + (e && e.message ? e.message : String(e)));
       });

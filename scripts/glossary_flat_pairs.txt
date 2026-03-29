@@ -1,0 +1,182 @@
+# wrong_spelling|canonical_target  (pipe-separated, lowercase keys)
+angutta|Anguttara Nikaya
+angutara|Anguttara Nikaya
+angutarra|Anguttara Nikaya
+majjima|Majjhima Nikāya
+majjhima nikaaya|Majjhima Nikāya
+deega|Dīgha Nikāya
+diga nikaya|Dīgha Nikāya
+samyutta nikaaya|Saṃyutta Nikāya
+khuddaka nikaaya|Khuddaka Nikāya
+tipitaka|Tipiṭaka
+tripitak|Tipiṭaka
+sutta pitak|Sutta Piṭaka
+vinaya pitak|Vinaya Piṭaka
+dhammapad|Dhammapada
+theragatha|Theragāthā
+therigatha|Therīgāthā
+itivuttak|Itivuttaka
+sutta nipat|Sutta Nipāta
+udan|Udāna
+khuddakapatha|Khuddakapāṭha
+jataka|Jātaka
+niddesa|Niddesa
+patisambhidamagga|Paṭisambhidāmagga
+apadan|Apadāna
+buddhavamsa|Buddhavaṃsa
+carika|Cariyāpiṭaka
+nettipakarana|Nettipakaraṇa
+petakopadesa|Peṭakopadesa
+milindapanha|Milindapañha
+visuddhimagga|Visuddhimagga
+abhidhammatthasangaha|Abhidhammatthasaṅgaha
+atthasalini|Atthasālinī
+dhammasangani|Dhammasaṅgaṇī
+vibhanga|Vibhaṅga
+dhatukatha|Dhātukathā
+puggalapannatti|Puggalapaññatti
+kathavatthu|Kathāvatthu
+yamaka|Yamaka
+patthana|Paṭṭhāna
+anapanasati|ānāpānasati
+anapan|ānāpāna
+satipattan|satipaṭṭhāna
+bojhang|bojjhaṅga
+sammappadhana|sammappadhāna
+iddhipad|iddhipāda
+indriyani|indriya
+balani|bala
+bojhangani|bojjhaṅga
+maggangani|maggaṅga
+phalan|phala
+sotapattiphala|sotāpattiphala
+sakadagamiphala|sakadāgāmiphala
+anagamiphala|anāgāmiphala
+arahattaphala|arahattaphala
+sotapattimagga|sotāpattimagga
+sakadagamimagga|sakadāgāmimagga
+anagamimagga|anāgāmimagga
+arahattamagga|arahattamagga
+pannindriya|paññindriya
+saddhindriy|saddhindriya
+viriyindriy|viriyindriya
+satindriy|satindriya
+samadhindriy|samādhindriya
+pannabala|paññābala
+saddhabala|saddhābala
+viriyabala|viriyabala
+satibala|satibala
+samadhibala|samādhibala
+hiribala|hiribala
+ottappabal|ottappabala
+mettacitt|mettācitta
+karunacitt|karuṇācitta
+muditacitt|muditācitta
+upekkacitt|upekkhācitta
+abyapajj|abyāpāda
+abyapann|abyāpanna
+abyapada|abyāpāda
+abyapajja|abyāpājja
+abyapajjh|abyāpajjha
+micchaditthi|micchā-diṭṭhi
+micchasankappa|micchā-saṅkappa
+micchavaca|micchā-vācā
+micchakammanta|micchā-kammanta
+micchaajiva|micchā-ājīva
+micchavayama|micchā-vāyāma
+micchasati|micchā-sati
+micchasamadhi|micchā-samādhi
+sammaditthi|sammā-diṭṭhi
+sammasankappa|sammā-saṅkappa
+sammavaca|sammā-vācā
+sammakammanta|sammā-kammanta
+sammaajiva|sammā-ājīva
+sammavayama|sammā-vāyāma
+sammasati|sammā-sati
+sammasamadhi|sammā-samādhi
+kammapath|kammapath
+dasakusal|dasa kusala
+dasakusalakammapath|dasa kusala kammapath
+akusalakammapath|akusala kammapath
+abyakatakammapath|abyākata kammapath
+dasakammapath|dasa kammapath
+kusalamula|kusalamūla
+akusalamula|akusalamūla
+abyakatamula|abyākatamūla
+abyakatahetu|abyākata hetu
+abyakatahetuka|abyākatahetuka
+kusalahetu|kusalahetu
+akusalahetu|akusalahetu
+kusalahetuka|kusalahetuka
+akusalahetuka|akusalahetuka
+abyakatahetuka|abyākatahetuka
+abyakatavipaka|abyākatavipāka
+kusala vipaka|kusala vipāka
+akusala vipaka|akusala vipāka
+abyakata vipaka|abyākata vipāka
+vipakadhamma|vipākadhamma
+vipakadhamm|vipākadhamma
+vipakadhammabhisankhara|vipākadhammābhisankhāra
+vipakadhammabhisankhar|vipākadhammābhisankhāra
+vipakadhammabhisankhata|vipākadhammābhisankhata
+vipakadhammabhisankhat|vipākadhammābhisankhata
+piti|pīti
+pith|pīti
+pitti|pīti
+ekodibhava|ekodibhāva
+ekaggata citta|ekaggatā citta
+ekaggata|ekaggatā
+passadi|passaddhi
+patisotagami|paṭisotagāmī
+anulomikakhanti|anulomika khanti
+patilomikakhanti|paṭilomika khanti
+patipad|paṭipadā
+patipanna|paṭipanna
+patipannak|paṭipannaka
+patipannakabhikkhu|paṭipannaka bhikkhu
+patipannakabhikkhuni|paṭipannaka bhikkhunī
+patipannakasangha|paṭipannaka saṅgha
+patipannakasavaka|paṭipannaka sāvaka
+patipannakaupasaka|paṭipannaka upāsaka
+patipannakaupasika|paṭipannaka upāsikā
+aparihana|aparihāna
+aparihana sutta|Aparihāna
+samadhibhavana|samādhi-bhāvanā
+samadhi bhavana sutta|samādhi-bhāvanā
+vipallasa sutta|vipallāsa
+don sutta|Doṇa
+dona sutta|Doṇa
+gandaba sutta|gandhabba
+yaka sutta|yakkha
+asava khaya|āsavakkhaya
+asavakkhaya|āsavakkhaya
+caranti|caraṇa
+vijjacarana|vijjā-caraṇa
+patimokkha|pātimokkha
+patimokha|pātimokkha
+samvar|saṃvara
+indriya samvar|indriya-saṃvara
+yoniso manasikara|yoniso manasikāra
+manasikara|manasikāra
+kayagatasati|kāyagatāsati
+bojhangas|bojjhaṅga
+satta bojjhanga|bojjhaṅga
+satta sambojjhanga|bojjhaṅga
+sambojjhanga|bojjhaṅga
+sambojjang|bojjhaṅga
+bojjhanga|bojjhaṅga
+aparihaniya|aparihāniya
+aparihaniya dhamma|aparihāniya dhamma
+nana dassana|ñāṇadassana
+nyan dassan|ñāṇadassana
+passadhi|passaddhi
+vipassana nana|vipassanāñāṇa
+magga nana|maggañāṇa
+phala nana|phalañāṇa
+gotrabhu nana|gotrabhuñāṇa
+sekha nana|sekhañāṇa
+asekha nana|asekhañāṇa
+vodana|vodāna
+vodan|vodāna
+pativedha nana|paṭivedha
+patisambhida nana|paṭisambhidā

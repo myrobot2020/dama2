@@ -1,0 +1,26 @@
+{
+  "transforms": [
+    {
+      "name": "glossary",
+      "options": {
+        "map_path": "pali_normalize_map.json"
+      }
+    },
+    {
+      "name": "sutta_tags",
+      "options": {}
+    },
+    {
+      "name": "phonetic_cleanup",
+      "options": {}
+    },
+    {
+      "name": "format_jhanas",
+      "options": {}
+    },
+    {
+      "name": "bold_canonical_keys",
+      "options": {}
+    }
+  ]
+}
