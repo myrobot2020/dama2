@@ -1,8 +1,12 @@
 rag_index/
+data/
 __pycache__/
 *.pyc
 .env
 _subtitle_tmp/
+
+ft/data/
+ft/runs/
 
 # Only the first sample transcript (001_*) is committed.
 # All others are downloaded via download_transcripts.py
