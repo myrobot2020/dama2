@@ -1,13 +1,26 @@
-# Cursor chat exports -> SFT JSONL -> optional LoRA (requirements-finetune.txt).
-# Training runs only if CURSOR_OLLAMA_PIPELINE=1 or you pass -Train.
+# Cursor Agent transcripts (DB + ~/.cursor/.../agent-transcripts) -> cursor chats/
+# -> SFT JSONL -> optional LoRA (requirements-finetune.txt).
+# Training runs only if CURSOR_OLLAMA_PIPELINE=1 or -Train.
 param(
     [switch]$Train,
-    [double]$MaxFileAgeHours = 0
+    [double]$MaxFileAgeHours = 0,
+    [switch]$SkipExport,
+    [ValidateSet("workspace", "all")]
+    [string]$ExportMode = "workspace",
+    [switch]$NoCleanExport
 )
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot -Parent)
 
-$prepareArgs = @()
+if (-not $SkipExport) {
+    $exportCmd = @("ft/export_cursor_db.py", "--mode", $ExportMode)
+    if (-not $NoCleanExport) {
+        $exportCmd += "--clean"
+    }
+    python @exportCmd
+}
+
+$prepareArgs = @("--val-files", "0")
 if ($MaxFileAgeHours -gt 0) {
     $prepareArgs += @("--max-file-age-hours", [string]$MaxFileAgeHours)
 }
