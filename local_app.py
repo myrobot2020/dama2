@@ -8,8 +8,8 @@ from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
 import re
+
 import requests
 import chromadb
 from chromadb.config import Settings
@@ -128,6 +128,57 @@ _STOPWORDS = frozenset(
     "some than that the their them then there these they this those through to too "
     "very was we were what when where which who will with would you your".split()
 )
+
+_SUTTA_ID_XYZ_RE = re.compile(
+    r"^\s*(?:AN[ _]*)?(\d+)[._](\d+)[._](\d+)\s*$",
+    flags=re.IGNORECASE,
+)
+
+
+def _try_parse_an_sutta_ref_from_question(question: str) -> Optional[str]:
+    """
+    Parse exact `x.y.z` sutta id inputs from the user query.
+
+    Accepts:
+      - `1.5.9`
+      - `AN 1.5.9`
+      - `AN_1_5_9`
+      - `1_5_9` (without AN prefix)
+    """
+    s = (question or "").strip().strip('"').strip("'")
+    m = _SUTTA_ID_XYZ_RE.fullmatch(s)
+    if not m:
+        return None
+    a, b, c = m.group(1), m.group(2), m.group(3)
+    sutta_id = f"{a}.{b}.{c}"
+    return "AN_" + sutta_id.replace(".", "_")
+
+
+def _build_exact_chunks_from_get_result(got: Dict[str, Any]) -> List[Chunk]:
+    docs = got.get("documents") or []
+    metas = got.get("metadatas") or []
+    chunks: List[Chunk] = []
+    sortable: List[tuple[int, int, Chunk]] = []
+
+    for doc, meta in zip(docs, metas):
+        if not isinstance(meta, dict):
+            meta = {}
+        # Sorting fields come from build_index.py metadata.
+        try:
+            sutta_part = int(meta.get("sutta_chunk_part") or 0)
+        except (TypeError, ValueError):
+            sutta_part = 0
+        try:
+            chunk_i = int(meta.get("chunk_index") or 0)
+        except (TypeError, ValueError):
+            chunk_i = 0
+
+        ch = _chunk_from_doc_meta(doc, meta, dist=None)
+        sortable.append((sutta_part, chunk_i, ch))
+
+    sortable.sort(key=lambda t: (t[0], t[1]))
+    chunks = [t[2] for t in sortable]
+    return chunks
 
 
 def _tokenize_query(q: str) -> List[str]:
@@ -671,6 +722,41 @@ def query(req: QueryRequest) -> QueryResponse:
             col = _get_collection()
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to open collection: {e}")
+
+        # Exact id lookup: if user typed an x.y.z sutta id, return the exact matching chunk(s)
+        # via Chroma metadata filtering (bypass embedding search + LLM).
+        exact_ref = _try_parse_an_sutta_ref_from_question(req.question)
+        if exact_ref:
+            _t_exact0 = time.perf_counter()
+            try:
+                got = col.get(
+                    where={"an_sutta_ref": exact_ref},
+                    include=["documents", "metadatas"],
+                )
+                chunks = _build_exact_chunks_from_get_result(got)
+            except Exception:
+                chunks = []
+
+            elapsed_ms = round((time.perf_counter() - _q_wall0) * 1000, 2)
+            retrieval_ms = round((time.perf_counter() - _t_exact0) * 1000, 2)
+
+            # For exact sutta-id queries, never fall back to semantic retrieval.
+            # Either return the exact match(es), or a clear "not available" response.
+            if chunks:
+                answer = ""
+            else:
+                answer = f"Sutta not available in this index: {exact_ref}"
+
+            return QueryResponse(
+                chunks=chunks,
+                answer=answer,
+                used_llm=False,
+                elapsed_ms=elapsed_ms,
+                rewrite_ms=0.0,
+                retrieval_ms=retrieval_ms,
+                context_ms=0.0,
+                llm_ms=0.0,
+            )
 
         history: List[Dict[str, str]] = []
         retrieval_q = req.question

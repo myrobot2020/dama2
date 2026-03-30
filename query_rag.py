@@ -16,6 +16,63 @@ COLLECTION_NAME = "dama_transcripts"
 OLLAMA_BASE_URL = "http://localhost:11434"
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:0.5b-instruct")
 
+_SUTTA_ID_XYZ_RE = re.compile(
+    r"^\s*(?:AN[ _]*)?(\d+)[._](\d+)[._](\d+)\s*$",
+    flags=re.IGNORECASE,
+)
+
+
+def _try_parse_an_sutta_ref_from_question(question: str) -> Optional[str]:
+    """
+    Parse exact `x.y.z` sutta id inputs from the user query.
+
+    Accepts:
+      - `1.5.9`
+      - `AN 1.5.9`
+      - `AN_1_5_9`
+      - `1_5_9` (without AN prefix)
+    """
+    s = (question or "").strip().strip('"').strip("'")
+    m = _SUTTA_ID_XYZ_RE.fullmatch(s)
+    if not m:
+        return None
+    a, b, c = m.group(1), m.group(2), m.group(3)
+    sutta_id = f"{a}.{b}.{c}"
+    return "AN_" + sutta_id.replace(".", "_")
+
+
+def _exact_get_chunks(collection, exact_ref: str, k: int) -> List[str]:
+    got = collection.get(
+        where={"an_sutta_ref": exact_ref},
+        include=["documents", "metadatas"],
+    )
+    docs = got.get("documents") or []
+    metas = got.get("metadatas") or []
+
+    sortable: List[tuple[int, int, str, str]] = []
+    # (sutta_chunk_part, chunk_index, source, text)
+    for doc, meta in zip(docs, metas):
+        if not isinstance(meta, dict):
+            meta = {}
+        try:
+            sutta_part = int(meta.get("sutta_chunk_part") or 0)
+        except (TypeError, ValueError):
+            sutta_part = 0
+        try:
+            chunk_i = int(meta.get("chunk_index") or 0)
+        except (TypeError, ValueError):
+            chunk_i = 0
+        src = str(meta.get("source") or "")
+        sortable.append((sutta_part, chunk_i, src, str(doc)))
+
+    sortable.sort(key=lambda t: (t[0], t[1]))
+    chosen = sortable[:k]
+    return [f"[source={src}] [an_sutta_ref={exact_ref}]\n{text}" for (_, _, src, text) in chosen]
+
+
+def _is_exact_sutta_id_query(q: str) -> bool:
+    return _try_parse_an_sutta_ref_from_question(q) is not None
+
 
 def get_collection():
     client = chromadb.PersistentClient(
@@ -333,20 +390,27 @@ def main() -> None:
 
     def run_once(q: str, retrieval_query: str, hist: Optional[List[Dict[str, str]]]) -> Optional[str]:
         try:
-            chunks = retrieve(
-                embed_model, collection, retrieval_query, k=args.k, an_book=args.an_book
-            )
+            exact_ref = _try_parse_an_sutta_ref_from_question(q)
+            if exact_ref:
+                chunks = _exact_get_chunks(collection, exact_ref, k=args.k)
+            else:
+                chunks = retrieve(
+                    embed_model, collection, retrieval_query, k=args.k, an_book=args.an_book
+                )
         except Exception as e:
             print(f"\nError while retrieving from the index: {e}")
             return None
 
         print("\nTop matching chunks:\n")
+        if _is_exact_sutta_id_query(q) and not chunks:
+            print(f"(exact lookup) Sutta not available in this index: {_try_parse_an_sutta_ref_from_question(q)}\n")
         for i, chunk in enumerate(chunks, start=1):
             print(f"--- Chunk {i} ---")
             print(chunk[:2000])
             print()
 
-        if use_llm:
+        # For exact sutta-id lookups we skip LLM synthesis; the goal is deterministic retrieval.
+        if use_llm and not _try_parse_an_sutta_ref_from_question(q):
             try:
                 answer = call_llm(q, chunks, chat_history=hist if hist else None)
             except Exception as e:
