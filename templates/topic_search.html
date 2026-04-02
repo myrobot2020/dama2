@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DAMA — AN Books 7–8</title>
+  <style>
+    :root {
+      --bg: #141518;
+      --surface: #1e1f24;
+      --panel: #25262d;
+      --text: #e8e9ed;
+      --muted: #8b909a;
+      --accent: #c9a227;
+      --accent-dim: #8a7020;
+      --border: #3d3f48;
+      --chat-user: #2a2d36;
+      --bot-strip: #1a1c22;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      line-height: 1.45;
+    }
+    .app-header {
+      padding: 0.9rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .app-header h1 {
+      margin: 0;
+      font-size: 1.75rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      color: var(--accent);
+    }
+    .bot-strip {
+      padding: 0.65rem 1.25rem;
+      background: var(--bot-strip);
+      border-bottom: 1px solid var(--border);
+      font-size: 0.9rem;
+      color: var(--text);
+      min-height: 2.5rem;
+    }
+    .bot-strip.empty { color: var(--muted); }
+    .main-grid {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 0;
+      min-height: 0;
+    }
+    @media (max-width: 960px) {
+      .main-grid { grid-template-columns: 1fr; }
+    }
+    .chains-area {
+      padding: 0.65rem 0.75rem;
+      overflow: auto;
+      overflow-x: hidden;
+      border-right: 1px solid var(--border);
+      min-width: 0;
+    }
+    .columns {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 14rem));
+      gap: 0.45rem;
+      align-items: start;
+      justify-content: start;
+      min-width: 0;
+    }
+    @media (max-width: 720px) {
+      .columns { grid-template-columns: 1fr; }
+    }
+    .column {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.4rem 0.4rem 0.45rem;
+      min-height: 0;
+      min-width: 0;
+      max-width: 14rem;
+      width: 100%;
+    }
+    .column-title {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--accent);
+      padding: 0.15rem 0.2rem 0.3rem;
+      line-height: 1.2;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+    .column-ids {
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
+      flex-wrap: wrap;
+      padding: 0 0.15rem 0.35rem;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 0.25rem;
+    }
+    .book-badge {
+      font-size: 0.65rem;
+      padding: 0.12rem 0.35rem;
+      border-radius: 4px;
+      background: #333;
+      color: var(--muted);
+    }
+    .sutta-id-txt { font-size: 0.8rem; font-weight: 600; color: var(--text); }
+    .chain-node {
+      padding: 0.12rem 0.2rem;
+      font-size: 0.78rem;
+      line-height: 1.35;
+      word-break: break-word;
+      text-align: left;
+    }
+    .chain-arrow {
+      text-align: center;
+      color: var(--accent-dim);
+      font-size: 0.85rem;
+      line-height: 1;
+      padding: 0 0 0.08rem;
+      user-select: none;
+    }
+    .info-btn {
+      width: 1.45rem;
+      height: 1.45rem;
+      border-radius: 50%;
+      border: 1px solid var(--accent-dim);
+      background: transparent;
+      color: var(--accent);
+      font-size: 0.68rem;
+      font-weight: 700;
+      font-style: italic;
+      cursor: pointer;
+      line-height: 1;
+      padding: 0;
+      flex-shrink: 0;
+    }
+    .info-btn:hover { background: rgba(201, 162, 39, 0.2); }
+    .column.selected { box-shadow: 0 0 0 2px var(--accent-dim); }
+    .detail-panel {
+      padding: 1rem;
+      overflow: auto;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .detail-panel h2 {
+      margin: 0;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }
+    .detail-panel .body {
+      font-size: 0.82rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: var(--panel);
+      padding: 0.65rem 0.75rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      max-height: 42vh;
+      overflow: auto;
+    }
+    .detail-placeholder { color: var(--muted); font-size: 0.88rem; font-style: italic; }
+    details.commentary-details {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--panel);
+      overflow: hidden;
+    }
+    details.commentary-details summary {
+      cursor: pointer;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--accent);
+      list-style: none;
+    }
+    details.commentary-details summary::-webkit-details-marker { display: none; }
+    details.commentary-details .comm-inner {
+      padding: 0 0.75rem 0.65rem;
+      font-size: 0.82rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 35vh;
+      overflow: auto;
+      border-top: 1px solid var(--border);
+    }
+    .chat-wrap {
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      display: flex;
+      flex-direction: column;
+      max-height: 46vh;
+    }
+    .chat-transcript {
+      flex: 1;
+      overflow: auto;
+      padding: 0.65rem 1rem;
+      min-height: 4rem;
+    }
+    .msg { margin-bottom: 0.55rem; font-size: 0.86rem; }
+    .msg .who { font-size: 0.68rem; color: var(--muted); margin-bottom: 0.15rem; }
+    .msg.user .bubble { background: var(--chat-user); padding: 0.4rem 0.6rem; border-radius: 6px; border: 1px solid var(--border); }
+    .msg.assistant .bubble { background: var(--panel); padding: 0.4rem 0.6rem; border-radius: 6px; border: 1px solid var(--border); white-space: pre-wrap; }
+    .msg.error .bubble { border-color: #8b4a4a; color: #e8a0a0; }
+    .footer-bar {
+      padding: 0.65rem 1rem 0.85rem;
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .footer-top {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem 1rem;
+    }
+    .mode-toggle {
+      display: inline-flex;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .mode-toggle label { margin: 0; cursor: pointer; }
+    .mode-toggle input { position: absolute; opacity: 0; pointer-events: none; }
+    .mode-toggle span {
+      display: block;
+      padding: 0.35rem 0.75rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+      background: var(--bg);
+    }
+    .mode-toggle input:checked + span {
+      background: var(--accent);
+      color: #1a1508;
+      font-weight: 600;
+    }
+    .footer-meta { font-size: 0.72rem; color: var(--muted); margin-left: auto; }
+    .footer-form {
+      display: flex;
+      gap: 0.5rem;
+      align-items: flex-end;
+    }
+    .footer-form .field {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+    .footer-form label.hint {
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+    .footer-form textarea {
+      width: 100%;
+      min-height: 2.4rem;
+      max-height: 7rem;
+      padding: 0.45rem 0.6rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.9rem;
+      resize: vertical;
+    }
+    .footer-form button {
+      padding: 0.45rem 1rem;
+      border: none;
+      border-radius: 6px;
+      background: var(--accent);
+      color: #1a1508;
+      font-weight: 600;
+      cursor: pointer;
+      height: fit-content;
+    }
+    .footer-form button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .warn-banner {
+      background: #3a3020;
+      color: #e8c96b;
+      padding: 0.4rem 1rem;
+      font-size: 0.8rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .empty-chains { color: var(--muted); font-size: 0.85rem; padding: 1rem; text-align: center; }
+  </style>
+</head>
+<body>
+  <header class="app-header">
+    <h1>DAMA</h1>
+  </header>
+  <div id="key-banner" class="warn-banner" style="display:none;"></div>
+  <div class="bot-strip empty" id="bot-strip">Use the bar below to search topics or ask DAMA.</div>
+  <div class="main-grid">
+    <div class="chains-area">
+      <div class="columns" id="columns"></div>
+      <div class="empty-chains" id="empty-chains" style="display:none;">No matches with extracted chains. Try other words.</div>
+    </div>
+    <aside class="detail-panel">
+      <h2>Sutta (reading)</h2>
+      <div class="body detail-placeholder" id="panel-sutta">Click (i) beside a sutta id to show text here.</div>
+      <details class="commentary-details" id="commentary-details" hidden>
+        <summary>Expand commentary</summary>
+        <div class="comm-inner" id="panel-commentary"></div>
+      </details>
+    </aside>
+  </div>
+  <div class="chat-wrap">
+    <div class="chat-transcript" id="chat-transcript"></div>
+    <div class="footer-bar">
+      <div class="footer-top">
+        <div class="mode-toggle" role="group" aria-label="Input mode">
+          <label><input type="radio" name="mode" value="search" id="mode-search" checked /><span>Search topics</span></label>
+          <label><input type="radio" name="mode" value="ask" id="mode-ask" /><span>Ask DAMA</span></label>
+        </div>
+        <span class="footer-meta" id="row-meta"></span>
+      </div>
+      <form class="footer-form" id="main-form">
+        <div class="field">
+          <label class="hint" for="main-input" id="input-hint">Enter keywords (e.g. faith, jhana) then Go.</label>
+          <textarea id="main-input" rows="2" placeholder="Topic keywords or your question…" autocomplete="off"></textarea>
+        </div>
+        <button type="submit" id="main-submit">Go</button>
+      </form>
+    </div>
+  </div>
+  <script>
+(function () {
+  const columnsEl = document.getElementById('columns');
+  const botStrip = document.getElementById('bot-strip');
+  const emptyChains = document.getElementById('empty-chains');
+  const panelSutta = document.getElementById('panel-sutta');
+  const panelComm = document.getElementById('panel-commentary');
+  const commDetails = document.getElementById('commentary-details');
+  const mainInput = document.getElementById('main-input');
+  const mainForm = document.getElementById('main-form');
+  const mainSubmit = document.getElementById('main-submit');
+  const modeSearch = document.getElementById('mode-search');
+  const modeAsk = document.getElementById('mode-ask');
+  const inputHint = document.getElementById('input-hint');
+  const chatTranscript = document.getElementById('chat-transcript');
+  const keyBanner = document.getElementById('key-banner');
+  const rowMeta = document.getElementById('row-meta');
+
+  let state = {
+    top: [],
+    query: '',
+    selectedCol: -1,
+    chatAvailable: false,
+    chatHistory: [],
+  };
+
+  function escapeHtml(s) {
+    if (!s) return '';
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function setPanel(hit) {
+    if (!hit) {
+      panelSutta.classList.add('detail-placeholder');
+      panelSutta.textContent = 'Click (i) beside a sutta id to show text here.';
+      commDetails.hidden = true;
+      commDetails.open = false;
+      panelComm.textContent = '';
+      return;
+    }
+    panelSutta.classList.remove('detail-placeholder');
+    panelSutta.innerHTML = escapeHtml(hit.sutta || '');
+    const c = (hit.commentary || '').trim();
+    if (c) {
+      commDetails.hidden = false;
+      panelComm.innerHTML = escapeHtml(c);
+      commDetails.open = false;
+    } else {
+      commDetails.hidden = true;
+      panelComm.textContent = '';
+    }
+  }
+
+  function selectColumn(colIdx) {
+    state.selectedCol = colIdx;
+    const hit = state.top[colIdx];
+    setPanel(hit);
+    document.querySelectorAll('.column').forEach((c, i) => {
+      c.classList.toggle('selected', i === colIdx);
+    });
+  }
+
+  function renderColumns(data) {
+    columnsEl.innerHTML = '';
+    state.top = data.top || [];
+    state.query = data.query || '';
+    const top = state.top;
+    if (!top.length) {
+      emptyChains.style.display = 'block';
+      botStrip.textContent = data.bot_summary || 'No results.';
+      botStrip.classList.add('empty');
+      state.selectedCol = -1;
+      setPanel(null);
+      return;
+    }
+    emptyChains.style.display = 'none';
+    botStrip.textContent = data.bot_summary || '';
+    botStrip.classList.remove('empty');
+
+    top.forEach((hit, colIdx) => {
+      const col = document.createElement('div');
+      col.className = 'column';
+      col.dataset.col = String(colIdx);
+
+      const titleEl = document.createElement('div');
+      titleEl.className = 'column-title';
+      titleEl.textContent = hit.title || 'Chain';
+      col.appendChild(titleEl);
+
+      const ids = document.createElement('div');
+      ids.className = 'column-ids';
+      if (hit.book != null && hit.book !== '') {
+        const b = document.createElement('span');
+        b.className = 'book-badge';
+        b.textContent = 'AN' + hit.book;
+        ids.appendChild(b);
+      }
+      const sid = document.createElement('span');
+      sid.className = 'sutta-id-txt';
+      sid.textContent = String(hit.sutta_id || '?');
+      ids.appendChild(sid);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'info-btn';
+      btn.setAttribute('aria-label', 'Show this sutta in the reading pane');
+      btn.textContent = 'i';
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        selectColumn(colIdx);
+      });
+      ids.appendChild(btn);
+      col.appendChild(ids);
+
+      const items = (hit.chain && hit.chain.items) ? hit.chain.items : [];
+      items.forEach((label, nodeIdx) => {
+        const node = document.createElement('div');
+        node.className = 'chain-node';
+        node.textContent = typeof label === 'string' ? label : String(label);
+        col.appendChild(node);
+        if (nodeIdx < items.length - 1) {
+          const ar = document.createElement('div');
+          ar.className = 'chain-arrow';
+          ar.textContent = '↓';
+          col.appendChild(ar);
+        }
+      });
+      columnsEl.appendChild(col);
+    });
+    selectColumn(0);
+  }
+
+  function clearChatTranscript() {
+    chatTranscript.innerHTML = '';
+    state.chatHistory = [];
+  }
+
+  async function runSearchFromInput() {
+    const q = mainInput.value.trim();
+    if (!q) return;
+    const url = '/?q=' + encodeURIComponent(q);
+    window.history.pushState({}, '', url);
+    clearChatTranscript();
+    const res = await fetch('/api/search?q=' + encodeURIComponent(q));
+    const data = await res.json();
+    renderColumns(data);
+  }
+
+  async function loadSearchFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    const q = params.get('q') || '';
+    mainInput.value = q;
+    if (!q.trim()) {
+      botStrip.textContent = 'Use the bar below to search topics or ask DAMA.';
+      botStrip.classList.add('empty');
+      columnsEl.innerHTML = '';
+      emptyChains.style.display = 'none';
+      state.top = [];
+      state.selectedCol = -1;
+      setPanel(null);
+      return;
+    }
+    const res = await fetch('/api/search?q=' + encodeURIComponent(q));
+    const data = await res.json();
+    renderColumns(data);
+  }
+
+  function contextForChat() {
+    const topCtx = state.top.map((h) => ({
+      sutta_id: h.sutta_id,
+      sutta: h.sutta || '',
+      commentary: h.commentary || '',
+    }));
+    if (state.selectedCol >= 0 && state.top[state.selectedCol]) {
+      const h = state.top[state.selectedCol];
+      return {
+        context: {
+          sutta_id: h.sutta_id,
+          sutta: h.sutta || '',
+          commentary: h.commentary || '',
+        },
+        top_context: topCtx,
+      };
+    }
+    return { context: null, top_context: topCtx.length ? topCtx : null };
+  }
+
+  async function runAskFromInput() {
+    const text = mainInput.value.trim();
+    if (!text) return;
+    if (!state.top.length) {
+      appendChat('assistant', 'Run a topic search first so DAMA has context.', true);
+      return;
+    }
+    if (!state.chatAvailable) {
+      appendChat('assistant', 'LLM not available: start Ollama, or set DAMA_USE_OLLAMA=0 with Groq/OpenAI keys.', true);
+      return;
+    }
+    appendChat('user', text, false);
+    mainInput.value = '';
+    mainSubmit.disabled = true;
+    const { context, top_context } = contextForChat();
+    const messages = state.chatHistory.concat([{ role: 'user', content: text }]);
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages, context, top_context }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        let err = res.statusText || 'Request failed';
+        if (data.detail !== undefined) {
+          err = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
+        }
+        appendChat('assistant', err, true);
+        return;
+      }
+      const reply = data.reply || '';
+      appendChat('assistant', reply, false);
+      state.chatHistory.push({ role: 'user', content: text });
+      state.chatHistory.push({ role: 'assistant', content: reply });
+      if (state.chatHistory.length > 20) {
+        state.chatHistory = state.chatHistory.slice(-20);
+      }
+    } catch (err) {
+      appendChat('assistant', String(err), true);
+    } finally {
+      mainSubmit.disabled = false;
+    }
+  }
+
+  function appendChat(role, text, isError) {
+    const wrap = document.createElement('div');
+    wrap.className = 'msg ' + role + (isError ? ' error' : '');
+    const who = document.createElement('div');
+    who.className = 'who';
+    who.textContent = role === 'user' ? 'You' : 'DAMA';
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.textContent = text;
+    wrap.appendChild(who);
+    wrap.appendChild(bubble);
+    chatTranscript.appendChild(wrap);
+    chatTranscript.scrollTop = chatTranscript.scrollHeight;
+  }
+
+  function updateHint() {
+    if (modeAsk.checked) {
+      inputHint.textContent = 'Ask about the current search results (requires LLM).';
+      mainInput.placeholder = 'Your question…';
+    } else {
+      inputHint.textContent = 'Enter keywords (e.g. faith, jhana) then Go.';
+      mainInput.placeholder = 'Topic keywords…';
+    }
+  }
+
+  modeSearch.addEventListener('change', updateHint);
+  modeAsk.addEventListener('change', updateHint);
+
+  mainForm.addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (modeAsk.checked) {
+      runAskFromInput();
+    } else {
+      runSearchFromInput();
+    }
+  });
+
+  function setMetaLine(chatPart, rowsPart) {
+    const bits = [];
+    if (chatPart) bits.push(chatPart);
+    if (rowsPart) bits.push(rowsPart);
+    rowMeta.textContent = bits.join(' · ');
+  }
+
+  fetch('/api/config')
+    .then((r) => r.json())
+    .then((cfg) => {
+      state.chatAvailable = !!cfg.chat_available;
+      const chatPart = cfg.chat_available
+        ? ('LLM: ' + (cfg.provider || '') + ' / ' + (cfg.model || ''))
+        : 'LLM: start Ollama or set DAMA_USE_OLLAMA=0 + Groq key';
+      if (!cfg.chat_available) {
+        keyBanner.style.display = 'block';
+        keyBanner.textContent = 'LLM offline: start Ollama (default), or set DAMA_USE_OLLAMA=0 and add creds/groqkey.txt / OpenAI.';
+      } else {
+        keyBanner.style.display = 'none';
+      }
+      fetch('/health')
+        .then((r) => r.json())
+        .then((h) => {
+          const rowsPart = h.rows ? h.rows + ' segments (AN7+AN8)' : '';
+          setMetaLine(chatPart, rowsPart);
+        })
+        .catch(() => setMetaLine(chatPart, ''));
+    })
+    .catch(() => setMetaLine('', ''));
+
+  loadSearchFromUrl();
+  updateHint();
+})();
+  </script>
+</body>
+</html>
