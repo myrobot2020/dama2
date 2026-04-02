@@ -1,3 +1,12 @@
 creds/
+rag_index/
 __pycache__/
 *.py[cod]
+*.pyc
+.env
+_subtitle_tmp/
+
+# Only the first sample transcript (001_*) is committed.
+# All others are downloaded via download_transcripts.py
+0[0-9][2-9]_*.txt
+0[1-9][0-9]_*.txt
