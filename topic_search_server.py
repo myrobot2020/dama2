@@ -505,12 +505,9 @@ def api_chat(req: ChatRequest) -> JSONResponse:
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request) -> Any:
-    return TEMPLATES.TemplateResponse(
-        "topic_search.html",
-        {
-            "request": request,
-        },
-    )
+    # Starlette's Jinja2Templates.TemplateResponse signature is:
+    #   TemplateResponse(request, name, context=None, ...)
+    return TEMPLATES.TemplateResponse(request, "topic_search.html")
 
 
 @app.get("/health")
