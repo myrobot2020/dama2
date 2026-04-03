@@ -1,0 +1,18 @@
+# Render Blueprint: connect this repo at https://dashboard.render.com → New → Blueprint
+# Web service = CPU only (no GPU). Set DAMA_USE_OLLAMA=0 and add GROQ_API_KEY or OPENAI_API_KEY.
+services:
+  - type: web
+    name: dama-topic-search
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements-web.txt
+    startCommand: uvicorn topic_search_server:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DAMA_USE_OLLAMA
+        value: "0"
+      - key: PYTHON_VERSION
+        value: "3.12.3"
+      # Add in the dashboard (secret) — do not commit keys:
+      # GROQ_API_KEY or OPENAI_API_KEY
+      # Optional: DAMA_GROQ_MODEL, DAMA_CHAT_MODEL
