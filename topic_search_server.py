@@ -10,7 +10,9 @@ LLM priority (first match wins):
   3) Groq: GROQ_API_KEY or creds/groqkey.txt
   4) OpenAI: OPENAI_API_KEY or creds/openaikey.txt (429 → Groq fallback if configured)
 
-Models: DAMA_CHAT_MODEL (Ollama default llama3.2), DAMA_GROQ_MODEL, OpenAI default gpt-4o-mini.
+Topic search uses only local JSON — no API keys. Ask/chat needs local Ollama (free) or Groq/OpenAI on the host.
+
+Models: DAMA_CHAT_MODEL (Ollama default qwen2.5:0.5b-instruct), DAMA_GROQ_MODEL, OpenAI default gpt-4o-mini.
 """
 
 from __future__ import annotations
@@ -18,6 +20,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
@@ -384,6 +388,17 @@ def _resolve_llm() -> tuple[Optional[OpenAI], str, str]:
     return None, "", "none"
 
 
+def _ollama_reachable() -> bool:
+    """True if something responds on default Ollama port (avoids claiming chat works when Ollama is off)."""
+    try:
+        with urllib.request.urlopen(
+            "http://127.0.0.1:11434/api/tags", timeout=0.75
+        ) as r:
+            return 200 <= getattr(r, "status", 200) < 300
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False
+
+
 def _groq_client_and_model() -> tuple[Optional[OpenAI], str]:
     gq = _groq_api_key()
     if not gq:
@@ -401,8 +416,12 @@ app = FastAPI(title="DAMA — AN 7–8")
 @app.get("/api/config")
 def api_config() -> dict[str, Any]:
     client, model, provider = _resolve_llm()
+    chat_ok = client is not None
+    custom_base = os.environ.get("DAMA_LLM_BASE_URL", "").strip()
+    if chat_ok and provider == "ollama" and not custom_base:
+        chat_ok = _ollama_reachable()
     return {
-        "chat_available": client is not None,
+        "chat_available": chat_ok,
         "provider": provider,
         "model": model,
     }

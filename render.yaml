@@ -1,5 +1,6 @@
 # Render Blueprint: connect this repo at https://dashboard.render.com → New → Blueprint
-# Web service = CPU only (no GPU). Set DAMA_USE_OLLAMA=0 and add GROQ_API_KEY or OPENAI_API_KEY.
+# CPU only (no GPU). Topic search works with zero keys. For Ask: set GROQ_API_KEY or OPENAI_API_KEY
+# (Ollama does not run on Render’s host). DAMA_USE_OLLAMA=0 skips dead localhost Ollama.
 services:
   - type: web
     name: dama-topic-search

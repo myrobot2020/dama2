@@ -303,7 +303,7 @@
     <h1>DAMA</h1>
   </header>
   <div id="key-banner" class="warn-banner" style="display:none;"></div>
-  <div class="bot-strip empty" id="bot-strip">Use the bar below to search topics or ask DAMA.</div>
+  <div class="bot-strip empty" id="bot-strip">Search topics below — no API key needed. Ask DAMA is optional (Ollama or Groq/OpenAI).</div>
   <div class="main-grid">
     <div class="chains-area">
       <div class="columns" id="columns"></div>
@@ -533,7 +533,7 @@
       return;
     }
     if (!state.chatAvailable) {
-      appendChat('assistant', 'LLM not available: start Ollama, or set DAMA_USE_OLLAMA=0 with Groq/OpenAI keys.', true);
+      appendChat('assistant', 'Topic search needs no API keys. For Ask: install Ollama (ollama.com), run it, then in a terminal: ollama pull qwen2.5:0.5b-instruct. On a host like Render, add a free Groq key (GROQ_API_KEY) — search still works without any key.', true);
       return;
     }
     appendChat('user', text, false);
@@ -619,11 +619,11 @@
     .then((cfg) => {
       state.chatAvailable = !!cfg.chat_available;
       const chatPart = cfg.chat_available
-        ? ('LLM: ' + (cfg.provider || '') + ' / ' + (cfg.model || ''))
-        : 'LLM: start Ollama or set DAMA_USE_OLLAMA=0 + Groq key';
+        ? ('Ask: ' + (cfg.provider || '') + ' / ' + (cfg.model || ''))
+        : 'Ask: off (no Ollama or cloud key)';
       if (!cfg.chat_available) {
         keyBanner.style.display = 'block';
-        keyBanner.textContent = 'LLM offline: start Ollama (default), or set DAMA_USE_OLLAMA=0 and add creds/groqkey.txt / OpenAI.';
+        keyBanner.textContent = 'Topic search needs no API keys. For Ask DAMA: run Ollama locally (free) and pull a small model, or set GROQ_API_KEY / OPENAI_API_KEY on the server.';
       } else {
         keyBanner.style.display = 'none';
       }
