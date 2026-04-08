@@ -1,0 +1,31 @@
+steps:
+  - name: "gcr.io/cloud-builders/docker"
+    args: ["build", "-t", "${_IMAGE_URI}", "."]
+  - name: "gcr.io/cloud-builders/docker"
+    args: ["push", "${_IMAGE_URI}"]
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: gcloud
+    args:
+      [
+        "run",
+        "deploy",
+        "${_SERVICE}",
+        "--image",
+        "${_IMAGE_URI}",
+        "--region",
+        "${_REGION}",
+        "--allow-unauthenticated",
+        "--set-env-vars",
+        "DAMA_USE_VERTEX=1,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_REGION=${_REGION}",
+      ]
+
+substitutions:
+  _REGION: "us-central1"
+  _SERVICE: "dama"
+  # Set _IMAGE_URI at submit time, example:
+  #   gcloud builds submit --substitutions=_IMAGE_URI=us-central1-docker.pkg.dev/PROJECT/dama/dama:TAG
+  _IMAGE_URI: ""
+
+images:
+  - "${_IMAGE_URI}"
+

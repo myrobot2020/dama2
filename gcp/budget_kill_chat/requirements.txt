@@ -1,0 +1,2 @@
+# No Python deps required. The function shells out to gcloud.
+

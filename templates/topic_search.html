@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>DAMA — AN Books 7–8</title>
+  <title>DAMA — AN Books 4–11</title>
   <style>
     :root {
       --bg: #141518;
@@ -18,6 +18,9 @@
       --bot-strip: #1a1c22;
     }
     * { box-sizing: border-box; }
+    html, body {
+      height: 100%;
+    }
     body {
       font-family: "Segoe UI", system-ui, sans-serif;
       background: var(--bg);
@@ -28,63 +31,102 @@
       flex-direction: column;
       line-height: 1.45;
     }
-    .app-header {
-      padding: 0.9rem 1.25rem;
+    .top-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.3rem 0.55rem;
       border-bottom: 1px solid var(--border);
       background: var(--surface);
+      flex-shrink: 0;
     }
-    .app-header h1 {
+    .top-bar .brand {
       margin: 0;
-      font-size: 1.75rem;
+      font-size: 0.9rem;
       font-weight: 700;
       letter-spacing: 0.12em;
       color: var(--accent);
+      flex-shrink: 0;
     }
-    .bot-strip {
-      padding: 0.65rem 1.25rem;
-      background: var(--bot-strip);
-      border-bottom: 1px solid var(--border);
-      font-size: 0.9rem;
+    .top-bar .bot-strip {
+      flex: 1;
+      min-width: 0;
+      padding: 0.15rem 0;
+      background: transparent;
+      border: 0;
+      font-size: 0.76rem;
       color: var(--text);
-      min-height: 2.5rem;
+      line-height: 1.35;
     }
-    .bot-strip.empty { color: var(--muted); }
-    .main-grid {
+    .top-bar .bot-strip.empty { color: var(--muted); }
+    .top-bar .row-meta {
+      font-size: 0.62rem;
+      color: var(--muted);
+      flex-shrink: 0;
+      max-width: 11rem;
+      text-align: right;
+      line-height: 1.25;
+    }
+    .workspace {
       flex: 1;
       display: grid;
-      grid-template-columns: 1fr 340px;
+      grid-template-columns: 1fr 1fr;
       gap: 0;
       min-height: 0;
+      border-top: 0;
     }
-    @media (max-width: 960px) {
-      .main-grid { grid-template-columns: 1fr; }
+    @media (max-width: 900px) {
+      .workspace {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(42vh, 1fr) minmax(42vh, 1fr);
+      }
+    }
+    .pane-left {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      min-width: 0;
+      min-height: 0;
+      border-right: 1px solid var(--border);
+    }
+    @media (max-width: 900px) {
+      .pane-left { border-right: 0; border-bottom: 1px solid var(--border); }
+    }
+    @media (max-width: 640px) {
+      .pane-left { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+    }
+    .pane-chat {
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--surface);
     }
     .chains-area {
-      padding: 0.65rem 0.75rem;
+      padding: 0.4rem 0.5rem;
       overflow: auto;
       overflow-x: hidden;
       border-right: 1px solid var(--border);
       min-width: 0;
+      min-height: 0;
+    }
+    @media (max-width: 640px) {
+      .chains-area { border-right: 0; border-bottom: 1px solid var(--border); }
     }
     .columns {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 14rem));
-      gap: 0.45rem;
+      grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+      gap: 0.35rem;
       align-items: start;
-      justify-content: start;
       min-width: 0;
-    }
-    @media (max-width: 720px) {
-      .columns { grid-template-columns: 1fr; }
     }
     .column {
       background: var(--panel);
       border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 0.4rem 0.4rem 0.45rem;
+      border-radius: 4px;
+      padding: 0.35rem 0.35rem 0.4rem;
       min-height: 0;
       min-width: 0;
-      max-width: 14rem;
+      max-width: none;
       width: 100%;
     }
     .column-title {
@@ -146,12 +188,14 @@
     .info-btn:hover { background: rgba(201, 162, 39, 0.2); }
     .column.selected { box-shadow: 0 0 0 2px var(--accent-dim); }
     .detail-panel {
-      padding: 1rem;
+      padding: 0.4rem 0.5rem;
       overflow: auto;
       background: var(--bg);
       display: flex;
       flex-direction: column;
-      gap: 0.5rem;
+      gap: 0.35rem;
+      min-height: 0;
+      min-width: 0;
     }
     .detail-panel h2 {
       margin: 0;
@@ -161,94 +205,85 @@
       color: var(--muted);
     }
     .detail-panel .body {
-      font-size: 0.82rem;
+      font-size: 0.8rem;
       white-space: pre-wrap;
       word-break: break-word;
       background: var(--panel);
-      padding: 0.65rem 0.75rem;
-      border-radius: 6px;
+      padding: 0.45rem 0.55rem;
+      border-radius: 4px;
       border: 1px solid var(--border);
-      max-height: 42vh;
+      flex: 1;
+      min-height: 5rem;
       overflow: auto;
     }
     .detail-placeholder { color: var(--muted); font-size: 0.88rem; font-style: italic; }
-    details.commentary-details {
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: var(--panel);
-      overflow: hidden;
-    }
-    details.commentary-details summary {
-      cursor: pointer;
-      padding: 0.5rem 0.75rem;
-      font-size: 0.78rem;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      color: var(--accent);
-      list-style: none;
-    }
-    details.commentary-details summary::-webkit-details-marker { display: none; }
-    details.commentary-details .comm-inner {
-      padding: 0 0.75rem 0.65rem;
-      font-size: 0.82rem;
-      white-space: pre-wrap;
-      word-break: break-word;
-      max-height: 35vh;
-      overflow: auto;
-      border-top: 1px solid var(--border);
+    .detail-panel .commentary-body {
+      flex: 1;
+      min-height: 3.5rem;
+      max-height: min(36vh, 18rem);
     }
     .chat-wrap {
-      border-top: 1px solid var(--border);
-      background: var(--surface);
+      flex: 1;
       display: flex;
       flex-direction: column;
-      max-height: 46vh;
+      min-height: 0;
+      border: 0;
+      background: var(--surface);
     }
     .chat-transcript {
       flex: 1;
       overflow: auto;
-      padding: 0.65rem 1rem;
-      min-height: 4rem;
+      padding: 0.45rem 0.55rem;
+      min-height: 3rem;
     }
     .msg { margin-bottom: 0.55rem; font-size: 0.86rem; }
     .msg .who { font-size: 0.68rem; color: var(--muted); margin-bottom: 0.15rem; }
     .msg.user .bubble { background: var(--chat-user); padding: 0.4rem 0.6rem; border-radius: 6px; border: 1px solid var(--border); }
     .msg.assistant .bubble { background: var(--panel); padding: 0.4rem 0.6rem; border-radius: 6px; border: 1px solid var(--border); white-space: pre-wrap; }
     .msg.error .bubble { border-color: #8b4a4a; color: #e8a0a0; }
+    .suggestion-list {
+      margin-top: 0.45rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+    .suggestion-list .sl-label {
+      font-size: 0.68rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .suggestion-chips {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0.3rem;
+    }
+    .suggestion-chip {
+      text-align: left;
+      font-size: 0.78rem;
+      line-height: 1.35;
+      padding: 0.35rem 0.5rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .suggestion-chip:hover {
+      border-color: var(--accent-dim);
+      background: rgba(201, 162, 39, 0.12);
+    }
     .footer-bar {
-      padding: 0.65rem 1rem 0.85rem;
+      padding: 0.4rem 0.55rem 0.5rem;
       border-top: 1px solid var(--border);
       display: flex;
       flex-direction: column;
-      gap: 0.5rem;
+      gap: 0.35rem;
+      flex-shrink: 0;
     }
-    .footer-top {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 0.5rem 1rem;
-    }
-    .mode-toggle {
-      display: inline-flex;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      overflow: hidden;
-    }
-    .mode-toggle label { margin: 0; cursor: pointer; }
-    .mode-toggle input { position: absolute; opacity: 0; pointer-events: none; }
-    .mode-toggle span {
-      display: block;
-      padding: 0.35rem 0.75rem;
-      font-size: 0.78rem;
-      color: var(--muted);
-      background: var(--bg);
-    }
-    .mode-toggle input:checked + span {
-      background: var(--accent);
-      color: #1a1508;
-      font-weight: 600;
-    }
-    .footer-meta { font-size: 0.72rem; color: var(--muted); margin-left: auto; }
+    .footer-meta { display: none; }
     .footer-form {
       display: flex;
       gap: 0.5rem;
@@ -291,50 +326,95 @@
     .warn-banner {
       background: #3a3020;
       color: #e8c96b;
-      padding: 0.4rem 1rem;
-      font-size: 0.8rem;
+      padding: 0.25rem 0.55rem;
+      font-size: 0.72rem;
       border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
     }
     .empty-chains { color: var(--muted); font-size: 0.85rem; padding: 1rem; text-align: center; }
+    .search-bar {
+      display: flex;
+      gap: 0.35rem;
+      align-items: flex-end;
+      margin-bottom: 0.4rem;
+      flex-shrink: 0;
+    }
+    .search-bar .field {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+      min-width: 0;
+    }
+    .search-bar label.hint {
+      font-size: 0.68rem;
+      color: var(--muted);
+    }
+    .search-bar input[type="text"] {
+      width: 100%;
+      padding: 0.35rem 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.85rem;
+    }
+    .search-bar button {
+      padding: 0.35rem 0.65rem;
+      border: none;
+      border-radius: 4px;
+      background: var(--accent);
+      color: #1a1508;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.78rem;
+      flex-shrink: 0;
+    }
+    .search-bar button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .msg.starters .bubble { font-size: 0.8rem; color: var(--muted); background: transparent; border-style: dashed; }
   </style>
 </head>
 <body>
-  <header class="app-header">
-    <h1>DAMA</h1>
+  <header class="top-bar">
+    <h1 class="brand">DAMA</h1>
+    <div class="bot-strip empty" id="bot-strip">AN 4–11 topic search — no API key. Ask needs Ollama or Groq/OpenAI.</div>
+    <span class="row-meta" id="row-meta"></span>
   </header>
   <div id="key-banner" class="warn-banner" style="display:none;"></div>
-  <div class="bot-strip empty" id="bot-strip">Search topics below — no API key needed. Ask DAMA is optional (Ollama or Groq/OpenAI).</div>
-  <div class="main-grid">
-    <div class="chains-area">
-      <div class="columns" id="columns"></div>
-      <div class="empty-chains" id="empty-chains" style="display:none;">No matches with extracted chains. Try other words.</div>
-    </div>
-    <aside class="detail-panel">
-      <h2>Sutta (reading)</h2>
-      <div class="body detail-placeholder" id="panel-sutta">Click (i) beside a sutta id to show text here.</div>
-      <details class="commentary-details" id="commentary-details" hidden>
-        <summary>Expand commentary</summary>
-        <div class="comm-inner" id="panel-commentary"></div>
-      </details>
-    </aside>
-  </div>
-  <div class="chat-wrap">
-    <div class="chat-transcript" id="chat-transcript"></div>
-    <div class="footer-bar">
-      <div class="footer-top">
-        <div class="mode-toggle" role="group" aria-label="Input mode">
-          <label><input type="radio" name="mode" value="search" id="mode-search" checked /><span>Search topics</span></label>
-          <label><input type="radio" name="mode" value="ask" id="mode-ask" /><span>Ask DAMA</span></label>
-        </div>
-        <span class="footer-meta" id="row-meta"></span>
+  <div class="workspace">
+    <div class="pane-left">
+      <div class="chains-area">
+        <form class="search-bar" id="search-form" action="#" autocomplete="off">
+          <div class="field">
+            <label class="hint" for="search-input">Topic search — Enter or Search</label>
+            <input type="text" id="search-input" placeholder="e.g. faith, jhana…" />
+          </div>
+          <button type="submit" id="search-submit">Search</button>
+        </form>
+        <div class="columns" id="columns"></div>
+        <div class="empty-chains" id="empty-chains" style="display:none;">No matches with extracted chains. Try other words.</div>
       </div>
-      <form class="footer-form" id="main-form">
-        <div class="field">
-          <label class="hint" for="main-input" id="input-hint">Enter keywords (e.g. faith, jhana) then Go.</label>
-          <textarea id="main-input" rows="2" placeholder="Topic keywords or your question…" autocomplete="off"></textarea>
+      <aside class="detail-panel">
+        <h2>Sutta (reading)</h2>
+        <div class="body detail-placeholder" id="panel-sutta">Click (i) beside a sutta id to show text here.</div>
+        <h2>Teacher commentary</h2>
+        <div class="body commentary-body detail-placeholder" id="panel-commentary">Select a result column to see commentary.</div>
+      </aside>
+    </div>
+    <div class="pane-chat">
+      <div class="chat-wrap">
+        <div class="chat-transcript" id="chat-transcript"></div>
+        <div class="footer-bar">
+          <form class="footer-form" id="ask-form" action="#" autocomplete="off">
+            <div class="field">
+              <label class="hint" for="ask-input">Ask DAMA about the current results — Enter sends, Shift+Enter newline.</label>
+              <textarea id="ask-input" rows="2" placeholder="Your question…" autocomplete="off"></textarea>
+            </div>
+            <button type="submit" id="ask-submit">Send</button>
+          </form>
         </div>
-        <button type="submit" id="main-submit">Go</button>
-      </form>
+      </div>
     </div>
   </div>
   <script>
@@ -344,13 +424,12 @@
   const emptyChains = document.getElementById('empty-chains');
   const panelSutta = document.getElementById('panel-sutta');
   const panelComm = document.getElementById('panel-commentary');
-  const commDetails = document.getElementById('commentary-details');
-  const mainInput = document.getElementById('main-input');
-  const mainForm = document.getElementById('main-form');
-  const mainSubmit = document.getElementById('main-submit');
-  const modeSearch = document.getElementById('mode-search');
-  const modeAsk = document.getElementById('mode-ask');
-  const inputHint = document.getElementById('input-hint');
+  const searchInput = document.getElementById('search-input');
+  const searchForm = document.getElementById('search-form');
+  const searchSubmit = document.getElementById('search-submit');
+  const askInput = document.getElementById('ask-input');
+  const askForm = document.getElementById('ask-form');
+  const askSubmit = document.getElementById('ask-submit');
   const chatTranscript = document.getElementById('chat-transcript');
   const keyBanner = document.getElementById('key-banner');
   const rowMeta = document.getElementById('row-meta');
@@ -374,21 +453,21 @@
     if (!hit) {
       panelSutta.classList.add('detail-placeholder');
       panelSutta.textContent = 'Click (i) beside a sutta id to show text here.';
-      commDetails.hidden = true;
-      commDetails.open = false;
-      panelComm.textContent = '';
+      panelComm.classList.add('detail-placeholder');
+      panelComm.innerHTML = '';
+      panelComm.textContent = 'Select a result column to see commentary.';
       return;
     }
     panelSutta.classList.remove('detail-placeholder');
     panelSutta.innerHTML = escapeHtml(hit.sutta || '');
     const c = (hit.commentary || '').trim();
     if (c) {
-      commDetails.hidden = false;
+      panelComm.classList.remove('detail-placeholder');
       panelComm.innerHTML = escapeHtml(c);
-      commDetails.open = false;
     } else {
-      commDetails.hidden = true;
-      panelComm.textContent = '';
+      panelComm.classList.add('detail-placeholder');
+      panelComm.textContent =
+        'No separate teacher commentary excerpt is stored for this sutta in the processed JSON (reading text may still include explanation).';
     }
   }
 
@@ -470,28 +549,99 @@
     selectColumn(0);
   }
 
-  function clearChatTranscript() {
-    chatTranscript.innerHTML = '';
-    state.chatHistory = [];
+  function priorUserMessagesForStarters() {
+    return state.chatHistory
+      .filter(function (m) { return m.role === 'user'; })
+      .map(function (m) { return m.content; })
+      .slice(-5);
+  }
+
+  function removeStarterMessages() {
+    chatTranscript.querySelectorAll('.msg.starters').forEach(function (el) {
+      el.remove();
+    });
+  }
+
+  function appendSearchStarters(questions) {
+    if (!questions || !questions.length) return;
+    removeStarterMessages();
+    const wrap = document.createElement('div');
+    wrap.className = 'msg assistant starters';
+    const who = document.createElement('div');
+    who.className = 'who';
+    who.textContent = 'DAMA';
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.textContent = 'About this search — tap a question to ask:';
+    wrap.appendChild(who);
+    wrap.appendChild(bubble);
+    const list = document.createElement('div');
+    list.className = 'suggestion-list';
+    const chips = document.createElement('div');
+    chips.className = 'suggestion-chips';
+    questions.forEach(function (q) {
+      const s = String(q || '').trim();
+      if (!s) return;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'suggestion-chip';
+      b.setAttribute('aria-label', 'Ask: ' + s);
+      b.textContent = s;
+      b.addEventListener('click', function () {
+        runAskFromInput(s);
+      });
+      chips.appendChild(b);
+    });
+    if (!chips.childNodes.length) return;
+    list.appendChild(chips);
+    wrap.appendChild(list);
+    chatTranscript.appendChild(wrap);
+    chatTranscript.scrollTop = chatTranscript.scrollHeight;
+  }
+
+  async function fetchSearchStarters(query, data) {
+    if (!state.chatAvailable || !data.top || !data.top.length) return;
+    const suttaIds = data.top.slice(0, 8).map(function (h) { return String(h.sutta_id || ''); });
+    try {
+      const res = await fetch('/api/search_starters', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: query,
+          sutta_ids: suttaIds,
+          prior_user_messages: priorUserMessagesForStarters(),
+        }),
+      });
+      const payload = await res.json().catch(function () { return {}; });
+      const qs = Array.isArray(payload.questions) ? payload.questions : [];
+      appendSearchStarters(qs);
+    } catch (e) {
+      /* ignore */
+    }
   }
 
   async function runSearchFromInput() {
-    const q = mainInput.value.trim();
+    const q = searchInput.value.trim();
     if (!q) return;
     const url = '/?q=' + encodeURIComponent(q);
     window.history.pushState({}, '', url);
-    clearChatTranscript();
-    const res = await fetch('/api/search?q=' + encodeURIComponent(q));
-    const data = await res.json();
-    renderColumns(data);
+    searchSubmit.disabled = true;
+    try {
+      const res = await fetch('/api/search?q=' + encodeURIComponent(q));
+      const data = await res.json();
+      renderColumns(data);
+      await fetchSearchStarters(q, data);
+    } finally {
+      searchSubmit.disabled = false;
+    }
   }
 
   async function loadSearchFromUrl() {
     const params = new URLSearchParams(window.location.search);
     const q = params.get('q') || '';
-    mainInput.value = q;
+    searchInput.value = q;
     if (!q.trim()) {
-      botStrip.textContent = 'Use the bar below to search topics or ask DAMA.';
+      botStrip.textContent = 'Use topic search on the left; chat on the right — history is kept across searches.';
       botStrip.classList.add('empty');
       columnsEl.innerHTML = '';
       emptyChains.style.display = 'none';
@@ -503,6 +653,7 @@
     const res = await fetch('/api/search?q=' + encodeURIComponent(q));
     const data = await res.json();
     renderColumns(data);
+    await fetchSearchStarters(q, data);
   }
 
   function contextForChat() {
@@ -525,8 +676,9 @@
     return { context: null, top_context: topCtx.length ? topCtx : null };
   }
 
-  async function runAskFromInput() {
-    const text = mainInput.value.trim();
+  async function runAskFromInput(directText) {
+    const fromField = directText === undefined || directText === null;
+    const text = (fromField ? askInput.value : String(directText)).trim();
     if (!text) return;
     if (!state.top.length) {
       appendChat('assistant', 'Run a topic search first so DAMA has context.', true);
@@ -537,8 +689,8 @@
       return;
     }
     appendChat('user', text, false);
-    mainInput.value = '';
-    mainSubmit.disabled = true;
+    if (fromField) askInput.value = '';
+    askSubmit.disabled = true;
     const { context, top_context } = contextForChat();
     const messages = state.chatHistory.concat([{ role: 'user', content: text }]);
     try {
@@ -557,7 +709,8 @@
         return;
       }
       const reply = data.reply || '';
-      appendChat('assistant', reply, false);
+      const suggestions = Array.isArray(data.suggestions) ? data.suggestions : [];
+      appendAssistantMessage(reply, suggestions);
       state.chatHistory.push({ role: 'user', content: text });
       state.chatHistory.push({ role: 'assistant', content: reply });
       if (state.chatHistory.length > 20) {
@@ -566,7 +719,7 @@
     } catch (err) {
       appendChat('assistant', String(err), true);
     } finally {
-      mainSubmit.disabled = false;
+      askSubmit.disabled = false;
     }
   }
 
@@ -585,26 +738,60 @@
     chatTranscript.scrollTop = chatTranscript.scrollHeight;
   }
 
-  function updateHint() {
-    if (modeAsk.checked) {
-      inputHint.textContent = 'Ask about the current search results (requires LLM).';
-      mainInput.placeholder = 'Your question…';
-    } else {
-      inputHint.textContent = 'Enter keywords (e.g. faith, jhana) then Go.';
-      mainInput.placeholder = 'Topic keywords…';
+  function appendAssistantMessage(text, suggestions) {
+    const wrap = document.createElement('div');
+    wrap.className = 'msg assistant';
+    const who = document.createElement('div');
+    who.className = 'who';
+    who.textContent = 'DAMA';
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.textContent = text;
+    wrap.appendChild(who);
+    wrap.appendChild(bubble);
+    if (suggestions && suggestions.length) {
+      const list = document.createElement('div');
+      list.className = 'suggestion-list';
+      const lab = document.createElement('div');
+      lab.className = 'sl-label';
+      lab.textContent = 'Try next';
+      list.appendChild(lab);
+      const chips = document.createElement('div');
+      chips.className = 'suggestion-chips';
+      suggestions.forEach(function (q) {
+        const s = String(q || '').trim();
+        if (!s) return;
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'suggestion-chip';
+        b.setAttribute('aria-label', 'Ask: ' + s);
+        b.textContent = s;
+        b.addEventListener('click', function () {
+          runAskFromInput(s);
+        });
+        chips.appendChild(b);
+      });
+      if (chips.childNodes.length) list.appendChild(chips);
+      if (list.querySelector('.suggestion-chip')) wrap.appendChild(list);
     }
+    chatTranscript.appendChild(wrap);
+    chatTranscript.scrollTop = chatTranscript.scrollHeight;
   }
 
-  modeSearch.addEventListener('change', updateHint);
-  modeAsk.addEventListener('change', updateHint);
-
-  mainForm.addEventListener('submit', function (e) {
+  searchForm.addEventListener('submit', function (e) {
     e.preventDefault();
-    if (modeAsk.checked) {
-      runAskFromInput();
-    } else {
-      runSearchFromInput();
-    }
+    runSearchFromInput();
+  });
+
+  askForm.addEventListener('submit', function (e) {
+    e.preventDefault();
+    runAskFromInput();
+  });
+
+  askInput.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' || e.shiftKey) return;
+    e.preventDefault();
+    askForm.requestSubmit();
   });
 
   function setMetaLine(chatPart, rowsPart) {
@@ -630,7 +817,7 @@
       fetch('/health')
         .then((r) => r.json())
         .then((h) => {
-          const rowsPart = h.rows ? h.rows + ' segments (AN7+AN8)' : '';
+          const rowsPart = h.rows ? h.rows + ' segments (AN 4–11)' : '';
           setMetaLine(chatPart, rowsPart);
         })
         .catch(() => setMetaLine(chatPart, ''));
@@ -638,7 +825,6 @@
     .catch(() => setMetaLine('', ''));
 
   loadSearchFromUrl();
-  updateHint();
 })();
   </script>
 </body>

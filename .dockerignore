@@ -1,0 +1,21 @@
+.git
+.github
+.cursor
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.venv
+creds
+rag_index
+output
+agent-transcripts
+*.log
+*.db
+*.sqlite
+processed transcript
+processed scipts2
+raw2
+

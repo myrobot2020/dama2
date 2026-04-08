@@ -82,3 +82,35 @@ python -m uvicorn local_app:app --host 127.0.0.1 --port 8000
 
 Lecture transcripts are auto-generated from this YouTube playlist:
 [Anguttara Nikaya by Bhante Hye Dhammavuddho Mahathera](https://www.youtube.com/playlist?list=PLD8I9vPmsYXxR_Qt36EbquMkYTOZbXWpM)
+
+## Cloud Run deploy (topic search + Vertex chat)
+
+This repo also contains the AN topic-search app (`topic_search_server.py`) which can be deployed to Google Cloud Run.
+
+### CI/CD (GitHub Actions → Cloud Run)
+
+- Workflow: `.github/workflows/deploy-cloudrun.yml`
+- On push to `main`, it builds a container and deploys to Cloud Run.
+
+You must set up Workload Identity Federation (recommended) and add GitHub repo secrets:
+- `GCP_WIF_PROVIDER`
+- `GCP_WIF_SERVICE_ACCOUNT`
+
+### Private data in GCS (recommended)
+
+The Cloud Run service can load `an*.json` from a **private** GCS bucket/prefix via:
+- `DAMA_DATA_GCS_URI=gs://<bucket>/<prefix>/`
+
+At startup, the app downloads matching `an*.json` into `/tmp` and uses them for topic search.
+
+### Vertex AI chat
+
+Enable Vertex chat with:
+- `DAMA_USE_VERTEX=1`
+- `DAMA_VERTEX_MODEL=gemini-2.5-flash` (default)
+- `DAMA_MAX_OUTPUT_TOKENS=384` (optional cap)
+
+### Budget kill switch (disable chat only)
+
+Set `DAMA_DISABLE_CHAT=1` on the Cloud Run service to disable `/api/chat` while keeping topic search available.
+There’s a Pub/Sub-triggered Cloud Function stub under `gcp/budget_kill_chat/` that can be wired to a $2.50 billing budget.

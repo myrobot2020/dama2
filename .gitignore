@@ -3,6 +3,26 @@ rag_index/
 __pycache__/
 *.py[cod]
 *.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+.vscode/
+.idea/
+.coverage
+htmlcov/
+.DS_Store
+Thumbs.db
+.python-version
+
+# Local / generated outputs
+output/
+*.log
+*.sqlite
+*.db
+
+# Avoid stray root-level AN JSON artifacts (canonical data lives under processed transcript/)
+an*.json
 .env
 _subtitle_tmp/
 
