@@ -16,7 +16,7 @@ env:
   AR_REPO: dama
   IMAGE: dama
   DAMA_DATA_GCS_URI: gs://dama-492316-an-data-9690/data/an/
-  DAMA_MAX_OUTPUT_TOKENS: "384"
+  DAMA_MAX_OUTPUT_TOKENS: "1024"
 
 jobs:
   deploy:

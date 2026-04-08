@@ -23,7 +23,7 @@ substitutions:
   _REGION: "us-central1"
   _SERVICE: "dama"
   _DAMA_DATA_GCS_URI: "gs://dama-492316-an-data-9690/data/an/"
-  _DAMA_MAX_OUTPUT_TOKENS: "384"
+  _DAMA_MAX_OUTPUT_TOKENS: "1024"
   # Set _IMAGE_URI at submit time, example:
   #   gcloud builds submit --substitutions=_IMAGE_URI=us-central1-docker.pkg.dev/PROJECT/dama/dama:TAG
   _IMAGE_URI: ""
