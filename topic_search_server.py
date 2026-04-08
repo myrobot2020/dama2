@@ -477,9 +477,11 @@ def _split_reply_and_suggestions(raw: str) -> tuple[str, list[str]]:
     try:
         parsed = json.loads(tail)
     except json.JSONDecodeError:
-        return reply, []
+        # If the model didn't follow the contract (marker present but no valid JSON),
+        # keep the original text so we don't silently drop visible content.
+        return raw_st, []
     if not isinstance(parsed, list):
-        return reply, []
+        return raw_st, []
     out: list[str] = []
     for item in parsed:
         if isinstance(item, str):

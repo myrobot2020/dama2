@@ -15,6 +15,8 @@ env:
   SERVICE: dama
   AR_REPO: dama
   IMAGE: dama
+  DAMA_DATA_GCS_URI: gs://dama-492316-an-data-9690/data/an/
+  DAMA_MAX_OUTPUT_TOKENS: "384"
 
 jobs:
   deploy:
@@ -55,6 +57,6 @@ jobs:
             --region "${{ env.REGION }}" \
             --project "${{ env.PROJECT_ID }}" \
             --allow-unauthenticated \
-            --set-env-vars "DAMA_USE_VERTEX=1,GOOGLE_CLOUD_PROJECT=${{ env.PROJECT_ID }},GOOGLE_CLOUD_REGION=${{ env.REGION }}" \
+            --set-env-vars "DAMA_USE_VERTEX=1,GOOGLE_CLOUD_PROJECT=${{ env.PROJECT_ID }},GOOGLE_CLOUD_REGION=${{ env.REGION }},DAMA_DATA_GCS_URI=${{ env.DAMA_DATA_GCS_URI }},DAMA_MAX_OUTPUT_TOKENS=${{ env.DAMA_MAX_OUTPUT_TOKENS }}" \
             --quiet
 
