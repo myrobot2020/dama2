@@ -91,6 +91,27 @@ This repo also contains the AN topic-search app (`topic_search_server.py`) which
 
 - Workflow: `.github/workflows/deploy-cloudrun.yml`
 - On push to `main`, it builds a container and deploys to Cloud Run.
+- Deploys with **`--allow-unauthenticated`** so **normal browsers** can reach the service (Cloud Run IAM does **not** use “signed into Gmail” as proof — that’s why `roles/run.invoker` on your user still returns **403** in Chrome).
+
+**App-level “private link” (recommended for phone browsers):**
+
+1. Add a GitHub Actions secret **`DAMA_ACCESS_KEY`** (long random string; **no commas**).
+2. Deploy (push to `main` or run the workflow). The workflow passes `DAMA_ACCESS_KEY` into the container.
+3. Open once in the same browser you use daily:
+
+   `https://YOUR-SERVICE-URL.run.app/?access_key=YOUR_SECRET`
+
+   The app sets an **HttpOnly cookie** (30 days) so `/api/*` works without putting the key on every request.
+
+4. Optional: remove IAM user bindings you added for testing; **`allUsers`** invoker is expected while using `DAMA_ACCESS_KEY`.
+
+If `DAMA_ACCESS_KEY` is **unset**, the app stays **fully public** (same as no gate).
+
+**Desktop-only access without changing deploy (IAM-only Cloud Run):**
+
+```bash
+gcloud run services proxy dama --region=us-central1 --project=dama-492316
+```
 
 You must set up Workload Identity Federation (recommended) and add GitHub repo secrets:
 - `GCP_WIF_PROVIDER`
@@ -114,3 +135,10 @@ Enable Vertex chat with:
 
 Set `DAMA_DISABLE_CHAT=1` on the Cloud Run service to disable `/api/chat` while keeping topic search available.
 There’s a Pub/Sub-triggered Cloud Function stub under `gcp/budget_kill_chat/` that can be wired to a $2.50 billing budget.
+
+### AN1 app (sutta + commentary) on Cloud Run (Vertex)
+
+- **Data in git:** `processed scipts2/an1.json` is **not** ignored (see `.gitignore` exception) so **`Dockerfile.an1`** and CI always have the sutta JSON.
+- **Workflow:** `.github/workflows/deploy-an1-cloudrun.yml` (manual **Run workflow**). It builds `an1_vertex_bundle.json` with Vertex embeddings, uploads to **`AN1_BUNDLE_GCS_URI`**, builds the image, deploys service **`dama-an1`** (override `PROJECT_ID` / URIs in the workflow file as needed).
+- **Runtime env:** `AN1_USE_VERTEX=1`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_REGION`, `AN1_VERTEX_BUNDLE_GCS_URI`, optional `DAMA_VERTEX_MODEL`, `AN1_VERTEX_EMBEDDING_MODEL`, `DAMA_MAX_OUTPUT_TOKENS`.
+- **IAM:** See the comment block at the top of that workflow file (Vertex + GCS for bundle; deploy is **unauthenticated** unless you lock down Cloud Run separately).

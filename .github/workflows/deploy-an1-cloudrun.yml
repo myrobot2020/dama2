@@ -1,0 +1,80 @@
+# AN1 three-pane app (an1_app.py) — Vertex embeddings + Gemini only in the container.
+#
+# IAM (Workload Identity service account used in this workflow):
+# - Artifact Registry: write (push image)
+# - Cloud Run: deploy + set service
+# - Vertex AI: User (embeddings at bundle build; same SA can be used if you grant it)
+# - Storage: object read/write on AN1_BUNDLE_GCS_URI (upload in CI; Cloud Run runtime reads bundle)
+#
+# Cloud Run **runtime** default service account (or the one you attach) needs:
+# - roles/aiplatform.user (Vertex predict / Gemini)
+# - storage.objects.get on the bundle object (and list if you use prefixes elsewhere)
+#
+# This workflow uses --allow-unauthenticated (public URL). AN1 does not implement DAMA_ACCESS_KEY;
+# use Cloud Run IAM (authenticated invokers) or IAP if you need a gate.
+#
+name: Deploy AN1 to Cloud Run (Vertex)
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: dama-492316
+  REGION: us-central1
+  SERVICE: dama-an1
+  AR_REPO: dama
+  IMAGE: dama-an1
+  # Upload bundle here; Cloud Run downloads at cold start.
+  AN1_BUNDLE_GCS_URI: gs://dama-492316-an-data-9690/an1/an1_vertex_bundle.json
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Auth to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_WIF_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker "${{ env.REGION }}-docker.pkg.dev" --quiet
+
+      - name: Install deps and build Vertex bundle
+        run: |
+          pip install --no-cache-dir -r requirements-an1-vertex.txt
+          export GOOGLE_CLOUD_PROJECT="${{ env.PROJECT_ID }}"
+          export GOOGLE_CLOUD_REGION="${{ env.REGION }}"
+          python an1_build_vertex_bundle.py --out /tmp/an1_vertex_bundle.json --upload "${{ env.AN1_BUNDLE_GCS_URI }}"
+
+      - name: Build and push image
+        run: |
+          IMAGE_URI="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/${{ env.IMAGE }}:${{ github.sha }}"
+          docker build -f Dockerfile.an1 -t "$IMAGE_URI" .
+          docker push "$IMAGE_URI"
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy "${{ env.SERVICE }}" \
+            --image "$IMAGE_URI" \
+            --region "${{ env.REGION }}" \
+            --project "${{ env.PROJECT_ID }}" \
+            --allow-unauthenticated \
+            --memory 2Gi \
+            --cpu 2 \
+            --timeout 300 \
+            --set-env-vars "AN1_USE_VERTEX=1,GOOGLE_CLOUD_PROJECT=${{ env.PROJECT_ID }},GOOGLE_CLOUD_REGION=${{ env.REGION }},AN1_VERTEX_BUNDLE_GCS_URI=${{ env.AN1_BUNDLE_GCS_URI }},DAMA_VERTEX_MODEL=gemini-2.5-flash,DAMA_MAX_OUTPUT_TOKENS=2048,AN1_VERTEX_EMBEDDING_MODEL=textembedding-gecko@003" \
+            --quiet

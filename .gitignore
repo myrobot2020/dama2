@@ -23,6 +23,8 @@ output/
 
 # Avoid stray root-level AN JSON artifacts (canonical data lives under processed transcript/)
 an*.json
+# Exception: AN1 source for local RAG + Dockerfile.an1 / CI (path contains a space).
+!processed scipts2/an1.json
 .env
 _subtitle_tmp/
 

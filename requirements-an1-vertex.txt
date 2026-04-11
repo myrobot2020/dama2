@@ -1,0 +1,7 @@
+# AN1 Cloud Run (Vertex embeddings + Gemini; no Chroma/torch in image).
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic>=2.0.0
+requests>=2.31.0
+google-cloud-storage>=2.16.0
+google-cloud-aiplatform>=1.71.0
