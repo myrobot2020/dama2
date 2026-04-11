@@ -1,0 +1,22 @@
+# Used by `gcloud builds submit`. Do not mirror .gitignore `an*.json` here — that pattern
+# prevents `processed scipts2/an1.json` from reaching Cloud Build even with a git negation rule.
+
+.git/
+**/__pycache__/
+**/.venv/
+**/.mypy_cache/
+**/.pytest_cache/
+**/.ruff_cache/
+**/*.pyc
+**/*.log
+.env
+creds/
+finetune/
+grok-export/
+cursor-export/
+training-data/
+rag_index/
+rag_index_an1/
+htmlcov/
+output/
+_subtitle_tmp/

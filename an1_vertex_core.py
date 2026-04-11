@@ -46,7 +46,8 @@ def vertex_project_and_location() -> Tuple[str, str]:
 
 
 def embedding_model_name() -> str:
-    return os.environ.get("AN1_VERTEX_EMBEDDING_MODEL", "").strip() or "textembedding-gecko@003"
+    # textembedding-gecko@003 retired; text-embedding-005 works with TextEmbeddingModel.from_pretrained (768-dim default).
+    return os.environ.get("AN1_VERTEX_EMBEDDING_MODEL", "").strip() or "text-embedding-005"
 
 
 def chat_model_name() -> str:

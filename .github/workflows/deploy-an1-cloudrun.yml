@@ -76,5 +76,5 @@ jobs:
             --memory 2Gi \
             --cpu 2 \
             --timeout 300 \
-            --set-env-vars "AN1_USE_VERTEX=1,GOOGLE_CLOUD_PROJECT=${{ env.PROJECT_ID }},GOOGLE_CLOUD_REGION=${{ env.REGION }},AN1_VERTEX_BUNDLE_GCS_URI=${{ env.AN1_BUNDLE_GCS_URI }},DAMA_VERTEX_MODEL=gemini-2.5-flash,DAMA_MAX_OUTPUT_TOKENS=2048,AN1_VERTEX_EMBEDDING_MODEL=textembedding-gecko@003" \
+            --set-env-vars "AN1_USE_VERTEX=1,GOOGLE_CLOUD_PROJECT=${{ env.PROJECT_ID }},GOOGLE_CLOUD_REGION=${{ env.REGION }},AN1_VERTEX_BUNDLE_GCS_URI=${{ env.AN1_BUNDLE_GCS_URI }},DAMA_VERTEX_MODEL=gemini-2.5-flash,DAMA_MAX_OUTPUT_TOKENS=2048,AN1_VERTEX_EMBEDDING_MODEL=text-embedding-005" \
             --quiet

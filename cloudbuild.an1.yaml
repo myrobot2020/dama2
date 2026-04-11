@@ -1,0 +1,31 @@
+# Build Dockerfile.an1 in GCP and deploy Cloud Run service dama-an1 (no local Docker).
+# Run: gcloud builds submit --config=cloudbuild.an1.yaml --project=dama-492316 .
+timeout: 1800s
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.an1
+      - -t
+      - us-central1-docker.pkg.dev/dama-492316/dama/dama-an1:$BUILD_ID
+      - .
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - us-central1-docker.pkg.dev/dama-492316/dama/dama-an1:$BUILD_ID
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - dama-an1
+      - --image=us-central1-docker.pkg.dev/dama-492316/dama/dama-an1:$BUILD_ID
+      - --region=us-central1
+      - --project=dama-492316
+      - --allow-unauthenticated
+      - --memory=2Gi
+      - --cpu=2
+      - --timeout=300
+      - >-
+        --set-env-vars=AN1_USE_VERTEX=1,GOOGLE_CLOUD_PROJECT=dama-492316,GOOGLE_CLOUD_REGION=us-central1,AN1_VERTEX_BUNDLE_GCS_URI=gs://dama-492316-an-data-9690/an1/an1_vertex_bundle.json,DAMA_VERTEX_MODEL=gemini-2.5-flash,DAMA_MAX_OUTPUT_TOKENS=2048,AN1_VERTEX_EMBEDDING_MODEL=text-embedding-005

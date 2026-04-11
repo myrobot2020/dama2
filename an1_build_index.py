@@ -3,11 +3,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-import chromadb
-from chromadb.config import Settings
-from sentence_transformers import SentenceTransformer
-from tqdm import tqdm
-
+# Chroma / sentence_transformers are imported inside main() only so an1_app can load this module
+# in the slim Vertex Docker image (no local index deps at runtime).
 
 BASE_DIR = Path(__file__).resolve().parent
 AN1_PATH = BASE_DIR / "processed scipts2" / "an1.json"
@@ -234,6 +231,11 @@ def _record_to_docs(record: Dict[str, Any]) -> List[Tuple[str, str, str, str]]:
 
 
 def main() -> None:
+    import chromadb
+    from chromadb.config import Settings
+    from sentence_transformers import SentenceTransformer
+    from tqdm import tqdm
+
     _dbg("H1", "an1_build_index.py:main", "Start build", {"an1_path": str(AN1_PATH), "persist_dir": str(PERSIST_DIR), "collection": COLLECTION_NAME})
 
     if not AN1_PATH.exists():

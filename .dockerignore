@@ -16,6 +16,8 @@ agent-transcripts
 *.db
 *.sqlite
 processed transcript
-processed scipts2
+# Keep AN1 JSON for Dockerfile.an1; ignore other large JSON in this folder.
+processed scipts2/*
+!processed scipts2/an1.json
 raw2
 
