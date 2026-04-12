@@ -48,3 +48,6 @@ rag_index_an2/
 
 # Fine-tune output dirs (large checkpoints)
 finetune/out-*/
+
+# Large raw Grok export (not needed in repo; regenerate locally if required)
+grok-export/prod-grok-backend.json
