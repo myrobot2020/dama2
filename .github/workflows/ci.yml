@@ -1,0 +1,27 @@
+# Fast checks on every PR / push (no GCP, no Docker).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+
+jobs:
+  python-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Ruff
+        run: pip install --no-cache-dir ruff==0.9.10
+
+      - name: Ruff (core AN modules)
+        run: ruff check an1_app.py an1_vertex_core.py an1_build_index.py an1_build_vertex_bundle.py
+
+      - name: Byte-compile (syntax)
+        run: |
+          python -m py_compile an1_app.py an1_vertex_core.py an1_build_index.py an1_build_vertex_bundle.py

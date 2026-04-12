@@ -17,6 +17,7 @@ COPY an1_app.py an1_vertex_core.py an1_build_vertex_bundle.py an1_build_index.py
 # Mirror repo layout for an1_build_index.AN1_PATH
 RUN mkdir -p "/app/processed scipts2"
 COPY ["processed scipts2/an1.json", "/app/processed scipts2/an1.json"]
+COPY ["processed scipts2/an2.json", "/app/processed scipts2/an2.json"]
 
 EXPOSE 8080
 

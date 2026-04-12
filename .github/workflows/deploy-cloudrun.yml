@@ -1,7 +1,8 @@
-# Single pipeline: deploy DAMA (topic search) and AN1 (Vertex RAG) to Cloud Run on push to main.
+# Deploy DAMA (topic search) and Dama AN RAG (Cloud Run dama-an1) on push to main.
+# Vertex corpus (manifest + shards) is built by .github/workflows/build-vertex-corpus.yml — not here.
+# Cloud Run uses AN1_VERTEX_MANIFEST_GCS_URI; AN1_VERTEX_BUNDLE_GCS_URI is optional fallback until manifest exists.
 #
 # Secrets: GCP_WIF_PROVIDER, GCP_WIF_SERVICE_ACCOUNT, DAMA_ACCESS_KEY (optional gate for DAMA only).
-# AN1 is public (--allow-unauthenticated); use Cloud Run IAM / IAP if you need a gate.
 #
 name: Deploy to Cloud Run (DAMA + AN1)
 
@@ -70,6 +71,7 @@ jobs:
       SERVICE: dama-an1
       AR_REPO: dama
       IMAGE: dama-an1
+      AN1_MANIFEST_GCS_URI: gs://dama-492316-an-data-9690/an1/vertex/manifest.json
       AN1_BUNDLE_GCS_URI: gs://dama-492316-an-data-9690/an1/an1_vertex_bundle.json
     steps:
       - name: Checkout
@@ -89,13 +91,6 @@ jobs:
       - name: Configure Docker auth
         run: gcloud auth configure-docker "${{ env.REGION }}-docker.pkg.dev" --quiet
 
-      - name: Install deps and build Vertex bundle
-        run: |
-          pip install --no-cache-dir -r requirements-an1-vertex.txt
-          export GOOGLE_CLOUD_PROJECT="${{ env.PROJECT_ID }}"
-          export GOOGLE_CLOUD_REGION="${{ env.REGION }}"
-          python an1_build_vertex_bundle.py --out /tmp/an1_vertex_bundle.json --upload "${{ env.AN1_BUNDLE_GCS_URI }}"
-
       - name: Build and push AN1 image
         run: |
           IMAGE_URI="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/${{ env.IMAGE }}:${{ github.sha }}"
@@ -113,5 +108,5 @@ jobs:
             --memory 2Gi \
             --cpu 2 \
             --timeout 300 \
-            --set-env-vars "AN1_USE_VERTEX=1,GOOGLE_CLOUD_PROJECT=${{ env.PROJECT_ID }},GOOGLE_CLOUD_REGION=${{ env.REGION }},AN1_VERTEX_BUNDLE_GCS_URI=${{ env.AN1_BUNDLE_GCS_URI }},DAMA_VERTEX_MODEL=gemini-2.5-flash,DAMA_MAX_OUTPUT_TOKENS=2048,AN1_VERTEX_EMBEDDING_MODEL=text-embedding-005" \
+            --set-env-vars "AN1_USE_VERTEX=1,GOOGLE_CLOUD_PROJECT=${{ env.PROJECT_ID }},GOOGLE_CLOUD_REGION=${{ env.REGION }},AN1_VERTEX_MANIFEST_GCS_URI=${{ env.AN1_MANIFEST_GCS_URI }},AN1_VERTEX_BUNDLE_GCS_URI=${{ env.AN1_BUNDLE_GCS_URI }},DAMA_VERTEX_MODEL=gemini-2.5-flash,DAMA_MAX_OUTPUT_TOKENS=2048,AN1_VERTEX_EMBEDDING_MODEL=text-embedding-005" \
             --quiet

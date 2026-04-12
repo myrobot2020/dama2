@@ -15,7 +15,9 @@ htmlcov/
 Thumbs.db
 .python-version
 
-# Per-sutta notes from AN1 reading UI (local disk)
+# Per-sutta chat history from AN1 reading UI (local disk)
+sutta_chat_history/
+global_chat_history/
 sutta_notes/
 
 # Local / generated outputs
@@ -28,6 +30,7 @@ output/
 an*.json
 # Exception: AN1 source for local RAG + Dockerfile.an1 / CI (path contains a space).
 !processed scipts2/an1.json
+!processed scipts2/an2.json
 .env
 _subtitle_tmp/
 
@@ -35,3 +38,13 @@ _subtitle_tmp/
 # All others are downloaded via download_transcripts.py
 0[0-9][2-9]_*.txt
 0[1-9][0-9]_*.txt
+
+# Cursor / local IDE
+.cursor/
+
+# Local Chroma persist (dev); Cloud Run uses Vertex + bundled JSON
+rag_index_an1/
+rag_index_an2/
+
+# Fine-tune output dirs (large checkpoints)
+finetune/out-*/
