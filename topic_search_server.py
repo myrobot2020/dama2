@@ -716,6 +716,62 @@ def _groq_client_and_model() -> tuple[Optional[OpenAI], str]:
 
 app = FastAPI(title="DAMA — AN 4–11")
 
+# Optional "private link" without Cloud Run IAM browser tokens: set DAMA_ACCESS_KEY to a long random
+# string. First visit: https://YOUR_HOST/?access_key=SECRET — cookie is set; API calls then work.
+_DAMA_ACCESS_KEY = os.environ.get("DAMA_ACCESS_KEY", "").strip()
+_DAMA_ACCESS_COOKIE = "dama_access"
+_DAMA_COOKIE_SECURE = os.environ.get("DAMA_COOKIE_SECURE", "1").strip() in ("1", "true", "yes")
+
+
+@app.middleware("http")
+async def dama_access_key_gate(request: Request, call_next):
+    if not _DAMA_ACCESS_KEY:
+        return await call_next(request)
+    path = request.url.path
+    if path == "/health":
+        return await call_next(request)
+    q = request.query_params.get("access_key", "")
+    h = request.headers.get("x-dama-access-key", "")
+    cookie = request.cookies.get(_DAMA_ACCESS_COOKIE, "")
+    if q == _DAMA_ACCESS_KEY or h == _DAMA_ACCESS_KEY or cookie == _DAMA_ACCESS_KEY:
+        resp = await call_next(request)
+        if q == _DAMA_ACCESS_KEY:
+            resp.set_cookie(
+                _DAMA_ACCESS_COOKIE,
+                value=_DAMA_ACCESS_KEY,
+                httponly=True,
+                secure=_DAMA_COOKIE_SECURE,
+                samesite="lax",
+                max_age=60 * 60 * 24 * 30,
+                path="/",
+            )
+        return resp
+    accept = (request.headers.get("accept") or "").lower()
+    if path == "/" and "text/html" in accept:
+        return HTMLResponse(
+            status_code=401,
+            content=(
+                "<!doctype html><html><body style='font-family:system-ui;padding:1.5rem;max-width:42rem;line-height:1.5'>"
+                "<h2>DAMA — access required</h2>"
+                "<p>This URL needs your <strong>access key</strong> in the query string (Cloud Run is open, the app is not).</p>"
+                "<p><strong>One-time setup:</strong> open a link that includes <code>access_key=…</code> (from your saved bookmark). "
+                "This browser then gets a cookie for ~30 days.</p>"
+                "<p><strong>Common mistake:</strong> opening only <code>/?q=deva</code> — that has no key. Use:</p>"
+                "<p><code>/?access_key=YOUR_SECRET&amp;q=deva</code></p>"
+                "<p><strong>Tip:</strong> bookmark the full URL with <code>access_key</code> so you never see this page again.</p>"
+                "</body></html>"
+            ),
+        )
+    return JSONResponse(
+        status_code=401,
+        content={
+            "detail": (
+                "Missing access key. Open the site once with ?access_key=YOUR_SECRET in the URL "
+                "(same browser). Or send header X-DAMA-Access-Key on API requests."
+            )
+        },
+    )
+
 
 @app.get("/api/config")
 def api_config() -> dict[str, Any]:

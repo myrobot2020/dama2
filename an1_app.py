@@ -22,6 +22,7 @@ from an1_build_index import (
 
 
 BASE_DIR = Path(__file__).resolve().parent
+NOTES_DIR = BASE_DIR / "sutta_notes"
 AN1_PATH = an1_build.AN1_PATH
 PERSIST_DIR = an1_build.PERSIST_DIR
 COLLECTION_NAME = an1_build.COLLECTION_NAME

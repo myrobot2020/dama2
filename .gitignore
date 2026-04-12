@@ -15,6 +15,9 @@ htmlcov/
 Thumbs.db
 .python-version
 
+# Per-sutta notes from AN1 reading UI (local disk)
+sutta_notes/
+
 # Local / generated outputs
 output/
 *.log

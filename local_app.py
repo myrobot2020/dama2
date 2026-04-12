@@ -29,6 +29,7 @@ class QueryRequest(BaseModel):
 
 class Chunk(BaseModel):
     source: str = ""
+    conversation_id: str = ""
     distance: Optional[float] = None
     text: str
 
@@ -67,6 +68,22 @@ def _tokenize_query(q: str) -> List[str]:
     return tokens[:12]
 
 
+def _chunk_from_doc(
+    doc: Any, meta: Any, dist: Optional[float] = None
+) -> Chunk:
+    src = ""
+    cid = ""
+    if isinstance(meta, dict):
+        src = str(meta.get("source") or "")
+        cid = str(meta.get("conversation_id") or "")
+    return Chunk(
+        source=src,
+        conversation_id=cid,
+        distance=float(dist) if dist is not None else None,
+        text=str(doc),
+    )
+
+
 def _lexical_score(query: str, chunk_text: str) -> int:
     q = (query or "").strip().lower()
     if not q or not chunk_text:
@@ -103,10 +120,7 @@ def _retrieve(embed_model: SentenceTransformer, collection: Any, query: str, k: 
 
     out: List[Chunk] = []
     for doc, meta, dist in zip(docs, metas, dists):
-        src = ""
-        if isinstance(meta, dict):
-            src = str(meta.get("source") or "")
-        out.append(Chunk(source=src, distance=float(dist) if dist is not None else None, text=str(doc)))
+        out.append(_chunk_from_doc(doc, meta, float(dist) if dist is not None else None))
 
     # Keyword fallback: also pull chunks that literally contain query terms.
     # This is critical for short keyword searches like "thai forest".
@@ -119,7 +133,7 @@ def _retrieve(embed_model: SentenceTransformer, collection: Any, query: str, k: 
 
     seen_keys = set()
     for c in out:
-        seen_keys.add((c.source, c.text[:200]))  # best-effort dedupe
+        seen_keys.add((c.source, c.conversation_id, c.text[:200]))  # best-effort dedupe
 
     for t in terms[:6]:
         try:
@@ -136,15 +150,12 @@ def _retrieve(embed_model: SentenceTransformer, collection: Any, query: str, k: 
         k_docs = (got or {}).get("documents", []) or []
         k_metas = (got or {}).get("metadatas", []) or []
         for doc, meta in zip(k_docs, k_metas):
-            src = ""
-            if isinstance(meta, dict):
-                src = str(meta.get("source") or "")
-            text = str(doc)
-            key = (src, text[:200])
+            ch = _chunk_from_doc(doc, meta, None)
+            key = (ch.source, ch.conversation_id, ch.text[:200])
             if key in seen_keys:
                 continue
             seen_keys.add(key)
-            out.append(Chunk(source=src, distance=None, text=text))
+            out.append(ch)
 
     # Stage 1: lexical + embedding score to get top candidates
     out.sort(
@@ -198,7 +209,7 @@ def _map_extract(query: str, chunk: Chunk, index: int) -> str:
             "role": "user",
             "content": (
                 f"Question: {query}\n\n"
-                f"[Excerpt {index} | source: {chunk.source}]\n{chunk.text}\n\n"
+                f"[Excerpt {index} | source: {chunk.source} | conv: {chunk.conversation_id or '-'}]\n{chunk.text}\n\n"
                 f"Extract relevant facts as bullet points with quotes:"
             ),
         },
@@ -238,7 +249,10 @@ def _reduce_synthesize(query: str, extracted_notes: str) -> str:
 def _call_llm(query: str, chunks: List[Chunk]) -> str:
     if len(chunks) <= 10:
         numbered = "\n\n".join(
-            [f"[Excerpt {i+1} | source: {c.source}]\n{c.text}" for i, c in enumerate(chunks)]
+            [
+                f"[Excerpt {i+1} | source: {c.source} | conv: {c.conversation_id or '-'}]\n{c.text}"
+                for i, c in enumerate(chunks)
+            ]
         )
         messages = [
             {
@@ -329,7 +343,7 @@ def home() -> str:
   </head>
   <body>
     <h1>Dama RAG (local)</h1>
-    <div class="muted">Ask questions against your transcript index. Use “Rebuild Index” if you add/change transcript files.</div>
+    <div class="muted">Ask questions against your index (repo-root *.txt transcripts plus *.chat.jsonl under training-data/, cursor-export/, grok-export/). Use “Rebuild Index” after adding files.</div>
 
     <div class="row">
       <input id="q" type="text" placeholder="Ask a question…" />
@@ -383,7 +397,7 @@ def home() -> str:
         let html = '<h3>Top matching chunks</h3>';
         for (const c of (data.chunks || [])) {
           html += '<div class="chunk">';
-          html += '<div class="src"><b>source</b>: ' + esc(c.source) + (c.distance != null ? (' &nbsp; <b>distance</b>: ' + esc(c.distance)) : '') + '</div>';
+          html += '<div class="src"><b>source</b>: ' + esc(c.source) + (c.conversation_id ? (' &nbsp; <b>conv</b>: ' + esc(c.conversation_id)) : '') + (c.distance != null ? (' &nbsp; <b>distance</b>: ' + esc(c.distance)) : '') + '</div>';
           html += '<pre>' + esc(c.text) + '</pre>';
           html += '</div>';
         }
@@ -406,6 +420,239 @@ def home() -> str:
 
       document.getElementById('ask').addEventListener('click', ask);
       document.getElementById('rebuild').addEventListener('click', rebuild);
+      document.getElementById('q').addEventListener('keydown', (e) => { if (e.key === 'Enter') ask(); });
+    </script>
+  </body>
+</html>
+"""
+
+
+@app.get("/v2", response_class=HTMLResponse)
+def home_v2() -> str:
+    # A nicer UI that still stays single-file and dependency-free.
+    return """
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dama RAG (local) — v2</title>
+    <style>
+      :root {
+        --bg: #0b1020;
+        --panel: #111a33;
+        --panel2: #0f1730;
+        --text: #e9eefc;
+        --muted: #a7b3d6;
+        --border: rgba(255,255,255,.10);
+        --accent: #7c5cff;
+        --good: #41d17a;
+        --bad: #ff5c7a;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+        color: var(--text);
+        background: radial-gradient(1200px 600px at 20% 0%, #18244a 0%, var(--bg) 60%) fixed;
+      }
+      .wrap { max-width: 1100px; margin: 0 auto; padding: 18px; }
+      header {
+        display: flex; gap: 14px; align-items: center; justify-content: space-between;
+        padding: 14px 16px; border: 1px solid var(--border); border-radius: 14px;
+        background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+        backdrop-filter: blur(6px);
+      }
+      .title { display: flex; flex-direction: column; gap: 2px; }
+      .title h1 { font-size: 16px; margin: 0; letter-spacing: .2px; }
+      .title .sub { font-size: 12px; color: var(--muted); }
+      .pill { display:inline-flex; align-items:center; gap:8px; padding:8px 10px; border-radius: 999px;
+              border: 1px solid var(--border); background: rgba(255,255,255,.04); color: var(--muted); font-size: 12px; }
+      .grid { display: grid; grid-template-columns: 1fr; gap: 14px; margin-top: 14px; }
+      @media (min-width: 980px) { .grid { grid-template-columns: 1.1fr .9fr; } }
+      .card {
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: rgba(17,26,51,.75);
+        backdrop-filter: blur(6px);
+        overflow: hidden;
+      }
+      .card h2 { font-size: 13px; margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--border); color: var(--muted); }
+      .card .body { padding: 12px 14px; }
+      .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+      input[type="text"]{
+        flex: 1; min-width: 260px; padding: 12px 12px; border-radius: 12px;
+        border: 1px solid var(--border); background: rgba(0,0,0,.20); color: var(--text);
+        outline: none;
+      }
+      input[type="number"]{
+        width: 86px; padding: 12px 10px; border-radius: 12px;
+        border: 1px solid var(--border); background: rgba(0,0,0,.20); color: var(--text);
+        outline: none;
+      }
+      button{
+        padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border);
+        background: rgba(255,255,255,.06); color: var(--text); cursor: pointer;
+      }
+      button.primary { background: linear-gradient(180deg, rgba(124,92,255,.9), rgba(124,92,255,.6)); border-color: rgba(124,92,255,.7); }
+      button.ghost { background: transparent; }
+      button:disabled { opacity: .55; cursor: not-allowed; }
+      label { color: var(--muted); font-size: 12px; }
+      .status { margin-top: 10px; font-size: 12px; color: var(--muted); }
+      .answer {
+        margin-top: 12px; padding: 12px; border-radius: 12px;
+        border: 1px solid var(--border); background: rgba(0,0,0,.18);
+        white-space: pre-wrap; word-break: break-word; font-size: 14px;
+      }
+      .chunks { display: flex; flex-direction: column; gap: 10px; }
+      .chunk {
+        padding: 12px; border-radius: 12px; border: 1px solid var(--border);
+        background: rgba(15,23,48,.55);
+      }
+      .meta { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom: 8px; color: var(--muted); font-size: 12px; }
+      .meta b { color: var(--text); font-weight: 600; }
+      .chunk pre { margin: 0; white-space: pre-wrap; word-break: break-word; color: #dbe6ff; font-size: 13px; line-height: 1.35; }
+      .copy {
+        margin-left: auto; display:inline-flex; align-items:center; gap:6px;
+        padding: 6px 10px; border-radius: 10px; border: 1px solid var(--border);
+        background: rgba(255,255,255,.05); color: var(--muted); cursor: pointer;
+      }
+      .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+      .kpi { display:flex; gap:10px; flex-wrap:wrap; }
+      .kpi .pill strong { color: var(--text); font-weight: 700; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <div class="title">
+          <h1>Dama RAG (local) — v2</h1>
+          <div class="sub">RAG over transcripts + your exported chats. Quotes are shown so you can verify “it came from my logs”.</div>
+        </div>
+        <div class="kpi">
+          <div class="pill">UI: <strong>v2</strong> <span style="opacity:.7">/v2</span></div>
+          <div class="pill">API: <strong>/api/query</strong></div>
+        </div>
+      </header>
+
+      <div class="grid">
+        <div class="card">
+          <h2>Ask</h2>
+          <div class="body">
+            <div class="row">
+              <input id="q" type="text" placeholder="Ask about your chats… (e.g. “what did we decide about ports?”)" />
+              <label>k</label>
+              <input id="k" type="number" min="1" max="20" value="6" />
+              <label><input id="use_llm" type="checkbox" checked /> use Ollama LLM</label>
+              <button id="ask" class="primary">Ask</button>
+              <button id="rebuild" class="ghost">Rebuild index</button>
+            </div>
+            <div id="status" class="status"></div>
+            <div id="answer" class="answer" style="display:none"></div>
+            <div class="hint">Tip: turn off “use Ollama LLM” to see pure retrieval without any summarization.</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Top matching quotes</h2>
+          <div class="body">
+            <div id="chunks" class="chunks"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const statusEl = document.getElementById('status');
+      const answerEl = document.getElementById('answer');
+      const chunksEl = document.getElementById('chunks');
+      const askBtn = document.getElementById('ask');
+      const rebuildBtn = document.getElementById('rebuild');
+
+      function setStatus(s) { statusEl.textContent = s || ''; }
+      function esc(s) { return (s ?? '').toString().replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+      async function ask() {
+        const question = document.getElementById('q').value.trim();
+        const k = parseInt(document.getElementById('k').value || '6', 10);
+        const use_llm = document.getElementById('use_llm').checked;
+        if (!question) return;
+
+        askBtn.disabled = true;
+        rebuildBtn.disabled = true;
+        answerEl.style.display = 'none';
+        chunksEl.innerHTML = '';
+        setStatus('Searching…');
+
+        try {
+          const res = await fetch('/api/query', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ question, k, use_llm })
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.detail || JSON.stringify(data) || res.statusText);
+
+          setStatus(data.used_llm ? 'Done (LLM answer generated).' : 'Done (retrieval only).');
+          answerEl.textContent = (data.answer || '(no answer)');
+          answerEl.style.display = 'block';
+
+          const chunks = (data.chunks || []);
+          if (!chunks.length) {
+            chunksEl.innerHTML = '<div class="hint">No matches. Try fewer words or increase k.</div>';
+          } else {
+            for (const c of chunks) {
+              const div = document.createElement('div');
+              div.className = 'chunk';
+              const conv = c.conversation_id ? esc(c.conversation_id) : '-';
+              const dist = (c.distance != null) ? String(c.distance) : '-';
+              const src = esc(c.source || '');
+              const text = (c.text || '').toString();
+
+              div.innerHTML =
+                '<div class=\"meta\">' +
+                  '<span><b>source</b>: ' + src + '</span>' +
+                  '<span><b>conv</b>: ' + conv + '</span>' +
+                  '<span><b>distance</b>: ' + esc(dist) + '</span>' +
+                  '<span class=\"copy\" title=\"Copy quote\">Copy</span>' +
+                '</div>' +
+                '<pre>' + esc(text) + '</pre>';
+
+              div.querySelector('.copy').onclick = async () => {
+                try { await navigator.clipboard.writeText(text); setStatus('Copied quote to clipboard.'); }
+                catch { setStatus('Copy failed (clipboard permissions).'); }
+              };
+              chunksEl.appendChild(div);
+            }
+          }
+        } catch (e) {
+          setStatus('Error: ' + (e?.message || e));
+        }
+
+        askBtn.disabled = false;
+        rebuildBtn.disabled = false;
+      }
+
+      async function rebuild() {
+        askBtn.disabled = true;
+        rebuildBtn.disabled = true;
+        setStatus('Rebuilding index… (this can take a bit)');
+        answerEl.style.display = 'none';
+        chunksEl.innerHTML = '';
+        try {
+          const res = await fetch('/api/build', { method: 'POST' });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.detail || JSON.stringify(data) || res.statusText);
+          setStatus('Index rebuilt. collection_count=' + data.collection_count);
+        } catch (e) {
+          setStatus('Rebuild error: ' + (e?.message || e));
+        }
+        askBtn.disabled = false;
+        rebuildBtn.disabled = false;
+      }
+
+      askBtn.addEventListener('click', ask);
+      rebuildBtn.addEventListener('click', rebuild);
       document.getElementById('q').addEventListener('keydown', (e) => { if (e.key === 'Enter') ask(); });
     </script>
   </body>
@@ -473,25 +720,29 @@ def query(req: QueryRequest) -> QueryResponse:
         answer = ""
         if req.use_llm:
             used_llm = True
-            # Expand context: pull all chunks from the primary source file
-            # so the LLM sees the full lecture argument, not just isolated hits.
+            # Expand context: prefer all chunks from the same chat conversation_id
+            # (merged JSONL shares one filename across many chats).
             llm_chunks = list(chunks)
-            seen = set((c.source, c.text[:200]) for c in llm_chunks)
-            primary_src = chunks[0].source if chunks else ""
-            if primary_src:
+            seen = set((c.source, c.conversation_id, c.text[:200]) for c in llm_chunks)
+            primary = chunks[0] if chunks else None
+            where_filter: Optional[Dict[str, Any]] = None
+            if primary and primary.conversation_id.strip():
+                where_filter = {"conversation_id": primary.conversation_id}
+            elif primary and primary.source:
+                where_filter = {"source": primary.source}
+            if where_filter:
                 try:
                     got = col.get(
-                        where={"source": primary_src},
+                        where=where_filter,
                         include=["documents", "metadatas"],
                         limit=50,
                     )
                     for doc, meta in zip(got.get("documents", []), got.get("metadatas", [])):
-                        src = str(meta.get("source", "")) if isinstance(meta, dict) else ""
-                        text = str(doc)
-                        key = (src, text[:200])
+                        ch = _chunk_from_doc(doc, meta, None)
+                        key = (ch.source, ch.conversation_id, ch.text[:200])
                         if key not in seen:
                             seen.add(key)
-                            llm_chunks.append(Chunk(source=src, text=text))
+                            llm_chunks.append(ch)
                 except Exception:
                     pass
             # Cap LLM context to avoid overwhelming the model.
