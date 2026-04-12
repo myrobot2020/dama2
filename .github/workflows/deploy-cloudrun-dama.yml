@@ -1,0 +1,70 @@
+# DAMA topic search → Cloud Run service `dama`.
+# Application image (code + requirements); runtime data from GCS (DAMA_DATA_GCS_URI).
+#
+# Secrets: GCP_WIF_PROVIDER, GCP_WIF_SERVICE_ACCOUNT, DAMA_ACCESS_KEY (optional).
+#
+name: Deploy Cloud Run — DAMA
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/deploy-cloudrun-dama.yml"
+      - "Dockerfile"
+      - "requirements-web.txt"
+      - "topic_search_server.py"
+      - "render.yaml"
+      - "templates/**"
+      - "processed transcript/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    name: DAMA (topic search)
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_ID: dama-492316
+      REGION: us-central1
+      SERVICE: dama
+      AR_REPO: dama
+      IMAGE: dama
+      DAMA_DATA_GCS_URI: gs://dama-492316-an-data-9690/data/an/
+      DAMA_MAX_OUTPUT_TOKENS: "1024"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Auth to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_WIF_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker "${{ env.REGION }}-docker.pkg.dev" --quiet
+
+      - name: Build and push image
+        run: |
+          IMAGE_URI="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/${{ env.IMAGE }}:${{ github.sha }}"
+          docker build -t "$IMAGE_URI" .
+          docker push "$IMAGE_URI"
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy "${{ env.SERVICE }}" \
+            --image "$IMAGE_URI" \
+            --region "${{ env.REGION }}" \
+            --project "${{ env.PROJECT_ID }}" \
+            --allow-unauthenticated \
+            --set-env-vars "DAMA_USE_VERTEX=1,GOOGLE_CLOUD_PROJECT=${{ env.PROJECT_ID }},GOOGLE_CLOUD_REGION=${{ env.REGION }},DAMA_DATA_GCS_URI=${{ env.DAMA_DATA_GCS_URI }},DAMA_MAX_OUTPUT_TOKENS=${{ env.DAMA_MAX_OUTPUT_TOKENS }},DAMA_ACCESS_KEY=${{ secrets.DAMA_ACCESS_KEY }}" \
+            --quiet

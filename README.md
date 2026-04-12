@@ -89,8 +89,9 @@ This repo also contains the AN topic-search app (`topic_search_server.py`) which
 
 ### CI/CD (GitHub Actions → Cloud Run)
 
-- Workflow: `.github/workflows/deploy-cloudrun.yml`
-- On push to `main`, it runs **two jobs in parallel**: **DAMA** (`topic_search_server`, root `Dockerfile`) and **AN1** (Vertex bundle + `Dockerfile.an1` → service `dama-an1`).
+- **DAMA:** `.github/workflows/deploy-cloudrun-dama.yml` → service **`dama`** (root `Dockerfile`, `topic_search_server.py`).
+- **AN1 RAG:** `.github/workflows/deploy-cloudrun-an1.yml` → service **`dama-an1`** (`Dockerfile.an1`, bundled `an1.json` / `an2.json`).
+- On push to `main`, **only the workflow whose paths changed** runs (plus manual **Run workflow** on either file). Both can run in parallel if both path sets match in one push.
 - Deploys with **`--allow-unauthenticated`** so **normal browsers** can reach the service (Cloud Run IAM does **not** use “signed into Gmail” as proof — that’s why `roles/run.invoker` on your user still returns **403** in Chrome).
 
 **App-level “private link” (recommended for phone browsers):**
@@ -139,7 +140,7 @@ There’s a Pub/Sub-triggered Cloud Function stub under `gcp/budget_kill_chat/` 
 ### AN1 app (sutta + commentary) on Cloud Run (Vertex)
 
 - **Data in git:** `processed scipts2/an1.json` is **not** ignored (see `.gitignore` exception) so **`Dockerfile.an1`** and CI always have the sutta JSON.
-- **Same workflow:** AN1 is the **`deploy-an1`** job inside `.github/workflows/deploy-cloudrun.yml` (runs on every **`main`** push). It builds `an1_vertex_bundle.json` with Vertex embeddings (`text-embedding-005` by default), uploads to GCS, builds **`Dockerfile.an1`**, deploys **`dama-an1`** (env `AN1_BUNDLE_GCS_URI` in that file).
+- **Deploy workflow:** `.github/workflows/deploy-cloudrun-an1.yml` builds and deploys the **application image** (`Dockerfile.an1` → **`dama-an1`**). **Embeddings / Vertex shards** are built separately by `.github/workflows/build-vertex-corpus.yml` and uploaded to GCS; Cloud Run reads them via `AN1_VERTEX_MANIFEST_GCS_URI` / `AN1_VERTEX_BUNDLE_GCS_URI`.
 - **CLI-only deploy (no local Docker):** `gcloud builds submit --config=cloudbuild.an1.yaml --project=dama-492316 .` then if needed `gcloud run services add-iam-policy-binding dama-an1 --region=us-central1 --member=allUsers --role=roles/run.invoker --project=dama-492316`.
 - **Runtime env:** `AN1_USE_VERTEX=1`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_REGION`, `AN1_VERTEX_BUNDLE_GCS_URI`, optional `DAMA_VERTEX_MODEL`, `AN1_VERTEX_EMBEDDING_MODEL`, `DAMA_MAX_OUTPUT_TOKENS`.
-- **IAM:** See the comment block at the top of that workflow file (Vertex + GCS for bundle; deploy is **unauthenticated** unless you lock down Cloud Run separately).
+- **IAM:** See comments in `.github/workflows/deploy-cloudrun-an1.yml` (Vertex + GCS; deploy is **unauthenticated** unless you lock down Cloud Run separately).

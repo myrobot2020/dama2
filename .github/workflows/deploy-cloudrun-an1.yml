@@ -1,0 +1,76 @@
+# AN1 RAG (FastAPI UI + API) → Cloud Run service `dama-an1`.
+# Application image: code + bundled an1.json / an2.json in Dockerfile.an1.
+# Search index / embeddings: GCS + Vertex (see build-vertex-corpus.yml), not built in this job.
+#
+# Secrets: GCP_WIF_PROVIDER, GCP_WIF_SERVICE_ACCOUNT.
+#
+name: Deploy Cloud Run — AN1
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/deploy-cloudrun-an1.yml"
+      - "Dockerfile.an1"
+      - "requirements-an1-vertex.txt"
+      - "an1_app.py"
+      - "an1_vertex_core.py"
+      - "an1_build_index.py"
+      - "an1_build_vertex_bundle.py"
+      - "processed scipts2/an1.json"
+      - "processed scipts2/an2.json"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    name: AN1 (Vertex RAG)
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_ID: dama-492316
+      REGION: us-central1
+      SERVICE: dama-an1
+      AR_REPO: dama
+      IMAGE: dama-an1
+      AN1_MANIFEST_GCS_URI: gs://dama-492316-an-data-9690/an1/vertex/manifest.json
+      AN1_BUNDLE_GCS_URI: gs://dama-492316-an-data-9690/an1/an1_vertex_bundle.json
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Auth to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_WIF_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker "${{ env.REGION }}-docker.pkg.dev" --quiet
+
+      - name: Build and push AN1 image
+        run: |
+          IMAGE_URI="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/${{ env.IMAGE }}:${{ github.sha }}"
+          docker build -f Dockerfile.an1 -t "$IMAGE_URI" .
+          docker push "$IMAGE_URI"
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+
+      - name: Deploy AN1 to Cloud Run
+        run: |
+          gcloud run deploy "${{ env.SERVICE }}" \
+            --image "$IMAGE_URI" \
+            --region "${{ env.REGION }}" \
+            --project "${{ env.PROJECT_ID }}" \
+            --allow-unauthenticated \
+            --memory 2Gi \
+            --cpu 2 \
+            --timeout 300 \
+            --set-env-vars "AN1_USE_VERTEX=1,GOOGLE_CLOUD_PROJECT=${{ env.PROJECT_ID }},GOOGLE_CLOUD_REGION=${{ env.REGION }},AN1_VERTEX_MANIFEST_GCS_URI=${{ env.AN1_MANIFEST_GCS_URI }},AN1_VERTEX_BUNDLE_GCS_URI=${{ env.AN1_BUNDLE_GCS_URI }},DAMA_VERTEX_MODEL=gemini-2.5-flash,DAMA_MAX_OUTPUT_TOKENS=2048,AN1_VERTEX_EMBEDDING_MODEL=text-embedding-005" \
+            --quiet
