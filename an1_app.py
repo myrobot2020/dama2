@@ -39,7 +39,7 @@ OLLAMA_BASE_URL = "http://localhost:11434"
 OLLAMA_MODEL = "mistral:instruct"
 
 # Bumped when RAG/LLM behavior changes (shown in GET /api/index_status so you know the server reloaded).
-AN1_APP_BUILD = "2026-04-12-an1-chain-links"
+AN1_APP_BUILD = "2026-04-12-gcp-parity-check"
 
 # Short reply for greetings / smalltalk — the citation-only LLM prompt is wrong for this (it still sees random retrieval).
 _CHAT_ONLY_REPLY = (
