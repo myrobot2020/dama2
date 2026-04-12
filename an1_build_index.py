@@ -1,7 +1,8 @@
 import json
 import os
+import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 # Chroma / sentence_transformers are imported inside main() only so an1_app can load this module
 # in the slim Vertex Docker image (no local index deps at runtime).
@@ -10,6 +11,10 @@ BASE_DIR = Path(__file__).resolve().parent
 AN1_PATH = BASE_DIR / "processed scipts2" / "an1.json"
 PERSIST_DIR = BASE_DIR / "rag_index_an1"
 COLLECTION_NAME = "an1_sutta"
+
+AN2_PATH = BASE_DIR / "processed scipts2" / "an2.json"
+PERSIST_AN2_DIR = BASE_DIR / "rag_index_an2"
+COLLECTION_AN2 = "an2_sutta"
 
 DEBUG_LOG_PATH = BASE_DIR / "debug-655121.log"
 
@@ -221,6 +226,11 @@ def _record_to_docs(record: Dict[str, Any]) -> List[Tuple[str, str, str, str]]:
                 f"SUTTAID: {suttaid}\nCOMMENTARY_ID: {cid}\n\nTEACHER COMMENTARY:\n{commentary}",
             )
         )
+    ch = record.get("chain")
+    if suttaid and isinstance(ch, dict):
+        chain_txt = _chain_block_text(suttaid, cid, ch)
+        if chain_txt.strip():
+            out.append(("chain", suttaid, cid, chain_txt))
     if not out and suttaid:
         # fallback: keep something indexable
         combined = f"SUTTAID: {suttaid}\nCOMMENTARY_ID: {cid}\n\nSUTTA:\n{sutta}"
@@ -230,47 +240,129 @@ def _record_to_docs(record: Dict[str, Any]) -> List[Tuple[str, str, str, str]]:
     return out
 
 
-def main() -> None:
+def _normalize_suttaid_an2(raw: Any) -> str:
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    if re.match(r"^AN\s+", s, flags=re.I):
+        tail = re.sub(r"^AN\s+", "", s, flags=re.I).strip()
+        return ("AN " + tail) if tail else ""
+    return "AN " + s
+
+
+def _commentary_id_from_suttaid(suttaid: str) -> str:
+    sid = (suttaid or "").strip()
+    if not sid:
+        return ""
+    return "c" + sid
+
+
+def _chain_block_text(suttaid: str, cid: str, chain: Dict[str, Any]) -> str:
+    cat = str(chain.get("category") or "").strip()
+    items = chain.get("items") or []
+    if not isinstance(items, list):
+        items = []
+    ordered = bool(chain.get("is_ordered"))
+    lines = [
+        f"SUTTAID: {suttaid}",
+        f"COMMENTARY_ID: {cid}",
+        "",
+        "CHAIN (enumerated links / topics for this discourse; not verbatim scripture):",
+        f"Category: {cat}" if cat else "Category: (none)",
+        f"Ordered pair: {'yes' if ordered else 'no'}",
+        "Items:",
+    ]
+    for i, it in enumerate(items):
+        lines.append(f"  {i + 1}. {str(it).strip()}")
+    return "\n".join(lines)
+
+
+def _record_to_docs_an2(record: Dict[str, Any]) -> List[Tuple[str, str, str, str]]:
+    suttaid = _normalize_suttaid_an2(record.get("sutta_id") or record.get("suttaid"))
+    cid = _commentary_id_from_suttaid(suttaid)
+    sutta = str(record.get("sutta") or "").strip()
+    commentary = _commentary_body(record)
+    out: List[Tuple[str, str, str, str]] = []
+    if suttaid and sutta:
+        out.append(
+            ("sutta", suttaid, cid, f"SUTTAID: {suttaid}\nCOMMENTARY_ID: {cid}\n\nSUTTA:\n{sutta}")
+        )
+    if suttaid and commentary:
+        out.append(
+            (
+                "commentary",
+                suttaid,
+                cid,
+                f"SUTTAID: {suttaid}\nCOMMENTARY_ID: {cid}\n\nTEACHER COMMENTARY:\n{commentary}",
+            )
+        )
+    ch = record.get("chain")
+    if suttaid and isinstance(ch, dict):
+        chain_txt = _chain_block_text(suttaid, cid, ch)
+        if chain_txt.strip():
+            out.append(("chain", suttaid, cid, chain_txt))
+    if not out and suttaid:
+        combined = f"SUTTAID: {suttaid}\nCOMMENTARY_ID: {cid}\n\nSUTTA:\n{sutta}"
+        if commentary:
+            combined += f"\n\nTEACHER COMMENTARY:\n{commentary}"
+        out.append(("combined", suttaid, cid, combined))
+    return out
+
+
+def _chromadb_build(
+    *,
+    json_path: Path,
+    persist_dir: Path,
+    collection_name: str,
+    record_to_docs: Callable[[Dict[str, Any]], List[Tuple[str, str, str, str]]],
+    id_prefix: str,
+    tqdm_desc: str,
+) -> int:
     import chromadb
     from chromadb.config import Settings
     from sentence_transformers import SentenceTransformer
     from tqdm import tqdm
 
-    _dbg("H1", "an1_build_index.py:main", "Start build", {"an1_path": str(AN1_PATH), "persist_dir": str(PERSIST_DIR), "collection": COLLECTION_NAME})
+    _dbg(
+        "H1",
+        "an1_build_index.py:_chromadb_build",
+        "Start build",
+        {"json_path": str(json_path), "persist_dir": str(persist_dir), "collection": collection_name},
+    )
 
-    if not AN1_PATH.exists():
-        _dbg("H1", "an1_build_index.py:main", "an1.json missing", {"an1_path": str(AN1_PATH)})
-        raise FileNotFoundError(f"Missing an1.json at: {AN1_PATH}")
+    if not json_path.exists():
+        _dbg("H1", "an1_build_index.py:_chromadb_build", "json missing", {"json_path": str(json_path)})
+        raise FileNotFoundError(f"Missing JSON at: {json_path}")
 
-    os.makedirs(PERSIST_DIR, exist_ok=True)
+    os.makedirs(persist_dir, exist_ok=True)
 
     client = chromadb.PersistentClient(
-        path=str(PERSIST_DIR),
+        path=str(persist_dir),
         settings=Settings(anonymized_telemetry=False),
     )
 
     try:
-        client.delete_collection(COLLECTION_NAME)
+        client.delete_collection(collection_name)
     except Exception:
         pass
-    collection = client.create_collection(COLLECTION_NAME)
+    collection = client.create_collection(collection_name)
 
-    _dbg("H5", "an1_build_index.py:main", "Loading embedding model", {"model": "all-MiniLM-L6-v2"})
+    _dbg("H5", "an1_build_index.py:_chromadb_build", "Loading embedding model", {"model": "all-MiniLM-L6-v2"})
     model = SentenceTransformer("all-MiniLM-L6-v2")
 
-    raw = AN1_PATH.read_text(encoding="utf-8", errors="ignore")
+    raw = json_path.read_text(encoding="utf-8", errors="ignore")
     try:
         data = _parse_json_lenient(raw)
     except Exception as e:
-        _dbg("H1", "an1_build_index.py:main", "JSON parse failed", {"error": str(e), "bytes": len(raw)})
+        _dbg("H1", "an1_build_index.py:_chromadb_build", "JSON parse failed", {"error": str(e), "bytes": len(raw)})
         data = _extract_records_fallback(raw)
-        _dbg("H1", "an1_build_index.py:main", "Fallback extracted records", {"count": len(data)})
+        _dbg("H1", "an1_build_index.py:_chromadb_build", "Fallback extracted records", {"count": len(data)})
 
     if not isinstance(data, list):
-        _dbg("H1", "an1_build_index.py:main", "Unexpected JSON shape", {"type": str(type(data))})
-        raise ValueError("Expected an1.json to be a JSON list of records.")
+        _dbg("H1", "an1_build_index.py:_chromadb_build", "Unexpected JSON shape", {"type": str(type(data))})
+        raise ValueError(f"Expected JSON list of records: {json_path}")
 
-    _dbg("H1", "an1_build_index.py:main", "Loaded records", {"count": len(data)})
+    _dbg("H1", "an1_build_index.py:_chromadb_build", "Loaded records", {"count": len(data)})
 
     batch_size = 64
     ids: List[str] = []
@@ -278,6 +370,7 @@ def main() -> None:
     texts: List[str] = []
 
     global_chunk_index = 0
+    source_rel = str(json_path.relative_to(BASE_DIR)).replace("\\", "/")
 
     def flush_batch() -> None:
         nonlocal ids, metadatas, texts
@@ -287,19 +380,19 @@ def main() -> None:
         collection.add(ids=ids, documents=texts, metadatas=metadatas, embeddings=embeddings)
         ids, metadatas, texts = [], [], []
 
-    for rec_i, rec in enumerate(tqdm(data, desc="AN1 records")):
+    for rec_i, rec in enumerate(tqdm(data, desc=tqdm_desc)):
         if not isinstance(rec, dict):
             continue
-        docs = _record_to_docs(rec)
+        docs = record_to_docs(rec)
         for doc_kind, suttaid, comm_id, doc_text in docs:
             if not doc_text.strip():
                 continue
             chunk_index = 0
             for chunk in read_in_chunks_from_string(doc_text):
-                ids.append(f"an1-{doc_kind}-{rec_i}-c{chunk_index}-g{global_chunk_index}")
+                ids.append(f"{id_prefix}-{doc_kind}-{rec_i}-c{chunk_index}-g{global_chunk_index}")
                 metadatas.append(
                     {
-                        "source": str(AN1_PATH.relative_to(BASE_DIR)).replace("\\", "/"),
+                        "source": source_rel,
                         "suttaid": suttaid,
                         "commentary_id": comm_id,
                         "kind": doc_kind,
@@ -314,9 +407,45 @@ def main() -> None:
                     flush_batch()
 
     flush_batch()
-    _dbg("H2", "an1_build_index.py:main", "Build finished", {"collection_count": int(collection.count())})
+    n = int(collection.count())
+    _dbg("H2", "an1_build_index.py:_chromadb_build", "Build finished", {"collection_count": n})
+    return n
+
+
+def build_an1_index() -> int:
+    return _chromadb_build(
+        json_path=AN1_PATH,
+        persist_dir=PERSIST_DIR,
+        collection_name=COLLECTION_NAME,
+        record_to_docs=_record_to_docs,
+        id_prefix="an1",
+        tqdm_desc="AN1 records",
+    )
+
+
+def build_an2_index() -> int:
+    return _chromadb_build(
+        json_path=AN2_PATH,
+        persist_dir=PERSIST_AN2_DIR,
+        collection_name=COLLECTION_AN2,
+        record_to_docs=_record_to_docs_an2,
+        id_prefix="an2",
+        tqdm_desc="AN2 records",
+    )
+
+
+def main() -> None:
+    build_an1_index()
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    ap = argparse.ArgumentParser(description="Build Chroma AN1 / AN2 RAG indexes.")
+    ap.add_argument("--book", choices=["an1", "an2", "all"], default="an1", help="Which index to build (default: an1).")
+    args = ap.parse_args()
+    if args.book in ("an1", "all"):
+        build_an1_index()
+    if args.book in ("an2", "all"):
+        build_an2_index()
 
