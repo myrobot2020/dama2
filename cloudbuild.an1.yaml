@@ -28,4 +28,4 @@ steps:
       - --cpu=2
       - --timeout=300
       - >-
-        --set-env-vars=AN1_USE_VERTEX=1,GOOGLE_CLOUD_PROJECT=dama-492316,GOOGLE_CLOUD_REGION=us-central1,AN1_VERTEX_BUNDLE_GCS_URI=gs://dama-492316-an-data-9690/an1/an1_vertex_bundle.json,DAMA_VERTEX_MODEL=gemini-2.5-flash,DAMA_MAX_OUTPUT_TOKENS=2048,AN1_VERTEX_EMBEDDING_MODEL=text-embedding-005
+        --set-env-vars=AN1_USE_VERTEX=1,GOOGLE_CLOUD_PROJECT=dama-492316,GOOGLE_CLOUD_REGION=us-central1,AN1_VERTEX_MANIFEST_GCS_URI=gs://dama-492316-an-data-9690/an1/vertex/manifest.json,AN1_VERTEX_BUNDLE_GCS_URI=gs://dama-492316-an-data-9690/an1/an1_vertex_bundle.json,DAMA_VERTEX_MODEL=gemini-2.5-flash,DAMA_MAX_OUTPUT_TOKENS=2048,AN1_VERTEX_EMBEDDING_MODEL=text-embedding-005
