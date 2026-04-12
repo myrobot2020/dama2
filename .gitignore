@@ -51,3 +51,8 @@ finetune/out-*/
 
 # Large raw Grok export (not needed in repo; regenerate locally if required)
 grok-export/prod-grok-backend.json
+
+# Scratch / duplicate JSON next to canonical an1.json + an2.json
+processed scipts2/Untitled
+processed scipts2/js.txt
+processed scipts2/* copy*.json
